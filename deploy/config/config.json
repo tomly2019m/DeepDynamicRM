@@ -1,0 +1,21 @@
+{
+    "cluster": {
+        "master": {
+            "host": "debian1",
+            "name": "debian1",
+            "label": "type=compute"
+        },
+        "workers":[
+            {
+                "host": "debian2",
+                "name": "debian2",
+                "label": "type=compute"
+            },
+            {
+                "host": "Ubuntu24",
+                "name": "Ubuntu24",
+                "label": "type=data"
+            }
+        ]
+    }
+}
