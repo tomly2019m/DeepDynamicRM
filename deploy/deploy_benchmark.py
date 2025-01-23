@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import time
 import docker
@@ -12,6 +13,7 @@ client = docker.from_env()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--docker_compose", type=str, default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/docker-compose-swarm.yml", help="benchmark yaml file path")
+parser.add_argument("--bench_dir", type=str, default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/", help="benchmark data dir")
 parser.add_argument("--benchmark_config", type=str, default="./config/socialnetwork.json", help="benchmark config file path")
 parser.add_argument("--username", type=str, default="tomly", help="username for ssh")
 args = parser.parse_args()
@@ -142,7 +144,7 @@ def deploy_benchmark():
 				command, stderr=subprocess.STDOUT, shell=True, universal_newlines=True).strip()
             if err:
                 raise RuntimeError(f"执行检查服务副本命令出错: {err}")
-            print("service: ", service.name, "replicas: ", result)
+            print("service: ", service.name, "replicas: ", out)
             if '(' in result:
                 result = result.split('(')[0]
                 actual = int(result.split('/')[0])
@@ -156,6 +158,27 @@ def deploy_benchmark():
             docker_stack_rm(resource_config["name"])
             raise RuntimeError("服务副本未完全拉起，等待超时")
     print("部署完成")
+
+
+
+# 初始化socialnetwork数据
+def init_socialnetwork_data():
+    bench_dir = args.bench_dir
+    script_path = os.path.join(bench_dir, "scripts", "setup_social_graph_init_data_sync.py")
+    command = f"python3 {script_path} {bench_dir}/datasets/social-graph/socfb-Reed98/socfb-Reed98.mtx"
+    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, command, stream_output=True)
+    if err:
+        raise RuntimeError(f"执行初始化数据命令出错: {err}")
+    print("初始化数据完成")
+
+
+# 初始化benchmark数据
+def init_data():
+    bench_name = args.benchmark_name
+    if bench_name == "socialnetwork":
+        init_socialnetwork_data()
+    
+
 
 def test_init():
     print(init_master())
