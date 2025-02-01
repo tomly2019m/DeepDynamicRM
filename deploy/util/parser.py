@@ -22,6 +22,12 @@ def parse_swarm_output(output):
 
     return result
 
+# 解析docker ps 的输出，得到服务名
+# 输入样例：socialnetwork_media-service.1.pfjrt565lfwu1m0qvljq9fq9i
+# 输出样例：media-service
+def parse_service_name(docker_ps_names: str) -> str:
+    return docker_ps_names.split("_")[1].split(".")[0]
+
 
 # 解析节点标签
 def parse_node_label(output: str) -> dict:
