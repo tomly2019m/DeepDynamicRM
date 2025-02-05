@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from shell import execute_command
 import sys
@@ -208,10 +209,63 @@ def get_network_usage():
     for service, container_list in service_container.items():
         service_network_usage[service] = []
         for container_name in container_list:
+
+            recv_bytes, send_bytes = 0, 0
+            
             container_id = container_name_id[container_name]
             container_pid = container_id_pid[container_id]
-            service_network_usage[service].append(network_usage)
+            pseudo_file = f"/proc/{container_pid}/net/dev"
+            if not os.path.exists(pseudo_file):
+                print(f"容器{container_name}的net/dev文件不存在")
+                continue
+
+            with open(pseudo_file, "r") as f:
+                lines = f.readlines()
+                for line in lines:
+                    if 'Inter-|   Receive' in line or 'face |bytes    packets errs' in line:
+                        continue
+                    data = line.strip().split()
+                    data = [d for d in data if (d != '' and '#' not in d and ":" not in d)]
+                    recv_bytes += int(data[0])
+                    send_bytes += int(data[8])
+                last_recv_bytes, last_send_bytes = container_id_total_network.get(container_id, (0, 0))
+                service_network_usage[service].append((recv_bytes - last_recv_bytes, send_bytes - last_send_bytes))
+                container_id_total_network[container_id] = (recv_bytes, send_bytes)
     return service_network_usage
+
+
+# 获取运行在当前节点上的所有服务的replicas数量
+def get_replicas():
+    global service_container
+    replicas = {}
+    for service, container_list in service_container.items():
+        replicas[service] = len(container_list)
+    return replicas
+
+# 计算一个列表中的最大值
+def calculate_max(data: list | list[tuple], position: int):
+    if isinstance(data[0], tuple):
+        return max(data, key=lambda x: x[position])
+    return max(data)
+
+# 计算一个列表中的最小值
+def calculate_min(data: list | list[tuple], position: int):
+    if isinstance(data[0], tuple):
+        return min(data, key=lambda x: x[position])
+    return min(data)
+
+# 计算一个列表中的平均值
+def calculate_mean(data: list | list[tuple], position: int):
+    if isinstance(data[0], tuple):
+        return sum(data, key=lambda x: x[position]) / len(data)
+    return sum(data) / len(data)
+    
+# 计算一个列表中的标准差
+def calculate_std(data: list | list[tuple], position: int):
+    if isinstance(data[0], tuple):
+        return math.sqrt(sum((x[position] - calculate_mean(data, position)) ** 2 for x in data) / len(data))
+    return math.sqrt(sum((x - calculate_mean(data, position)) ** 2 for x in data) / len(data))
+
 
 # 初始化数据采集器
 def init_collector():
@@ -222,6 +276,10 @@ def init_collector():
 
 def main():
     pass
+
+def test_get_network_usage():
+    init_collector()
+    print(get_network_usage())
 
 def test_get_container_cpu_usage():
     init_collector()
@@ -254,4 +312,4 @@ def test_get_io_usage():
     print(get_io_usage())
 
 if __name__ == "__main__":
-    test_get_io_usage()
+    test_get_network_usage()
