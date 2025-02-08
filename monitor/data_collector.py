@@ -1,9 +1,10 @@
 import json
 import math
 import os
+import time
 from shell import execute_command
 import sys
-
+import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -31,6 +32,12 @@ container_id_total_io: dict[str, tuple[int, int]] = {}
 
 # 容器id -> 容器总网络接收量和网络发送量，用于计算在一段时间内容器占用的网络量 (int, int)->(接收量, 发送量)
 container_id_total_network: dict[str, tuple[int, int]] = {}
+
+# 数据采集指标列表
+metrics = ["cpu_usage", "memory_usage", "io_write", "io_read", "network_recv", "network_send"]
+
+# 数据采集间隔 单位：秒
+collect_interval = 1
 
 benchmark_name = "socialnetwork"
 
@@ -259,12 +266,54 @@ def calculate_mean(data: list | list[tuple], position: int):
     if isinstance(data[0], tuple):
         return sum(data, key=lambda x: x[position]) / len(data)
     return sum(data) / len(data)
-    
+
 # 计算一个列表中的标准差
 def calculate_std(data: list | list[tuple], position: int):
     if isinstance(data[0], tuple):
         return math.sqrt(sum((x[position] - calculate_mean(data, position)) ** 2 for x in data) / len(data))
     return math.sqrt(sum((x - calculate_mean(data, position)) ** 2 for x in data) / len(data))
+
+# 将不同节点上的数据合并
+def concat_data(data1: dict, data2: dict):
+    for k, v in data2.items():
+        dict.setdefault(k, []).extend(v)
+    return data1
+
+# 汇聚不同节点上的replicas数据 相同服务，数据相加
+def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str, list[int]]):
+    for k, v in data2.items():
+        if k in data1:
+            data1[k] = data1[k] + data2[k]
+        else:
+            data1[k] = data2[k]
+    return data1
+
+# 处理数据，计算每个服务的最大值、最小值、平均值、标准差
+def process_data(data: dict):
+    for k, v in data.items():
+        if isinstance(v[0], tuple):
+            data[k] = [calculate_max(v, 0), calculate_min(v, 0), calculate_mean(v, 0), calculate_std(v, 0)]
+            data[k].append([calculate_max(v, 1), calculate_min(v, 1), calculate_mean(v, 1), calculate_std(v, 1)])
+        else:
+            data[k] = [calculate_max(v), calculate_min(v), calculate_mean(v), calculate_std(v)]
+    return data
+
+# 将处理好的dict转换为numpy数组 shape = (service_num, metric_num, [max, min, mean, std] -> 4)
+# dict的key为服务名，value为列表[max1, min1, mean1, std1, max2, min2, mean2, std2, ...] 
+# 每4个为一组，分别表示指标[cpu_usage, memory_usage, io_write, io_read, network_recv, network_send]的max, min, mean, std
+def to_numpy(data: dict):
+    service_num = len(data)
+    metric_num = len(metrics)
+    numpy_data = np.zeros((service_num, metric_num, 4))  
+    
+    for i, service_name in enumerate(data):
+        service_data = data[service_name] 
+        
+        for j in range(metric_num):
+            # 每个指标的 4 个数值分别为 max, min, mean, std
+            numpy_data[i, j] = service_data[j*4:(j+1)*4]
+
+    return numpy_data
 
 
 # 初始化数据采集器
@@ -274,8 +323,32 @@ def init_collector():
     set_container_name_id()
     set_container_pids()
 
+# 主函数的职责
+# 1. 初始化数据采集器
+# 2. 以一定间隔采集数据
+# 3. 发送数据
 def main():
-    pass
+    init_collector()
+    while True:
+        # 定时采集逻辑
+        time.sleep(collect_interval)
+        # 存储最新数据到内存缓存
+        global latest_data
+        latest_data = {
+            "cpu": get_container_cpu_usage(),
+            "memory": get_memory_usage(),
+            "io": get_io_usage(),
+            "network": get_network_usage()
+        }
+
+
+
+def test_to_numpy():
+    data = {
+        "serviceA": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+        "serviceB": [26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    }
+    print(to_numpy(data).shape)
 
 def test_get_network_usage():
     init_collector()
@@ -312,4 +385,4 @@ def test_get_io_usage():
     print(get_io_usage())
 
 if __name__ == "__main__":
-    test_get_network_usage()
+    test_to_numpy()
