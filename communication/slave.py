@@ -1,11 +1,30 @@
+import os
 import socket
+import sys
+import json
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
+
+from monitor.data_collector import *
 
 def handle_command(command):
     # 在这里解析并执行命令
-    # 这是一个简单的示例，实际操作需要根据命令内容进行
     print('Executing command:', command)
-    result = f"Executed: {command}"
-    return result
+    
+    response = None
+    if command == 'init':
+        init_collector()
+    
+    elif command == 'collect':
+        latest_data = {
+            "cpu": get_container_cpu_usage(),
+            "memory": get_memory_usage(),
+            "io": get_io_usage(),
+            "network": get_network_usage()
+        }
+        response = json.dumps(latest_data, indent=4)
+    return response
 
 def slave_listen(master_host, master_port):
     # 创建 socket 对象
@@ -26,6 +45,9 @@ def slave_listen(master_host, master_port):
                 command = data.decode()
                 # 处理命令
                 result = handle_command(command)
+
+                if result == "stop" or not result:
+                    break
                 # 返回结果
                 conn.sendall(result.encode())
 

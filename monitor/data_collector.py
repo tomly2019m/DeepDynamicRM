@@ -323,23 +323,25 @@ def init_collector():
     set_container_name_id()
     set_container_pids()
 
+
+# 定时的逻辑应该在master中，在master中定时采集数据，而不是在data_collector中
 # 主函数的职责
 # 1. 初始化数据采集器
 # 2. 以一定间隔采集数据
 # 3. 发送数据
-def main():
-    init_collector()
-    while True:
-        # 定时采集逻辑
-        time.sleep(collect_interval)
-        # 存储最新数据到内存缓存
-        global latest_data
-        latest_data = {
-            "cpu": get_container_cpu_usage(),
-            "memory": get_memory_usage(),
-            "io": get_io_usage(),
-            "network": get_network_usage()
-        }
+# def main():
+#     init_collector()
+#     while True:
+#         # 定时采集逻辑
+#         time.sleep(collect_interval)
+#         # 存储最新数据到内存缓存
+#         global latest_data
+#         latest_data = {
+#             "cpu": get_container_cpu_usage(),
+#             "memory": get_memory_usage(),
+#             "io": get_io_usage(),
+#             "network": get_network_usage()
+#         }
 
 
 

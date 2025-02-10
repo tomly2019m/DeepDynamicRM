@@ -1,5 +1,18 @@
+import argparse
+import json
+import os
 import socket
-import threading
+import sys
+import time
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--exp_time", type=int, default=30, help="experiment time")
+args = parser.parse_args()
+
+exp_time = args.exp_time
 
 class SlaveConnection:
     def __init__(self, slave_host, slave_port):
@@ -25,32 +38,38 @@ class SlaveConnection:
             self.socket.close()
             print(f"Connection to {self.slave_host}:{self.slave_port} closed.")
 
-def manage_connections(slaves):
+def start_experiment(slaves):
     connections = {}
     for slave_host, slave_port in slaves:
         connection = SlaveConnection(slave_host, slave_port)
         connections[(slave_host, slave_port)] = connection
-
     try:
         while True:
-            command = input("Enter command (or 'exit' to quit): ")
-            if command.lower() == 'exit':
+            
+
+            
+            time.sleep(1)
+            exp_time -= 1
+            
+            # 实验结束
+            if exp_time == 0:
                 break
-            target = input("Enter target slave (host:port): ")
-            host, port = target.split(':')
-            port = int(port)
-            if (host, port) in connections:
-                connections[(host, port)].send_command(command)
-            else:
-                print("Invalid target.")
     finally:
         for connection in connections.values():
             connection.close()
 
+
+def main():
+    # 从配置文件中读取主机名和端口，然后创建连接
+    comm_config = ''
+    with open("./comm.json", 'r') as f:
+        comm_config = json.load(f)
+    hosts = comm_config["slaves"]
+    port = comm_config["port"]
+    slaves = []
+    for host in hosts:
+        slaves.append((host, port))
+    start_experiment(slaves)
+
 if __name__ == "__main__":
-    slaves = [
-        ('slave1_host', 12345),  # 替换为实际的 slave 主机名或 IP 和端口
-        ('slave2_host', 12346),  # 添加更多的 slave 信息
-        # ...
-    ]
-    pass
+    main()
