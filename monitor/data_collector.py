@@ -2,7 +2,7 @@ import json
 import math
 import os
 import time
-from shell import execute_command
+from .shell import execute_command
 import sys
 import numpy as np
 

@@ -1,9 +1,7 @@
 {
     "master": "debain1",
     "slaves": [
-        "debian1",
-        "debian2",
-        "Ubuntu24"
+        "debian1"
     ],
     "port": 12345
 }

@@ -33,10 +33,10 @@ def slave_listen(master_host, master_port):
         s.bind((master_host, master_port))
         # 监听连接
         s.listen()
-        print('Waiting for connection...')
+        print('等待连接...')
         conn, addr = s.accept()
         with conn:
-            print('Connected by', addr)
+            print(f'连接成功: {addr}')
             while True:
                 # 接收数据
                 data = conn.recv(1024)

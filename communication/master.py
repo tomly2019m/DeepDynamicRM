@@ -39,14 +39,17 @@ class SlaveConnection:
             print(f"Connection to {self.slave_host}:{self.slave_port} closed.")
 
 def start_experiment(slaves):
-    connections = {}
+    global exp_time
+    connections : dict[tuple[str, int], SlaveConnection] = {}
     for slave_host, slave_port in slaves:
         connection = SlaveConnection(slave_host, slave_port)
+        connection.send_command("init")
         connections[(slave_host, slave_port)] = connection
     try:
         while True:
-            
-
+            # 遍历所有slave连接，发送collect命令采集数据
+            for connection in connections.values():
+                connection.send_command("collect")
             
             time.sleep(1)
             exp_time -= 1
