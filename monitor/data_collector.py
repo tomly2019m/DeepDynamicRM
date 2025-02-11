@@ -2,12 +2,13 @@ import json
 import math
 import os
 import time
-from .shell import execute_command
+
 import sys
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
+from monitor.shell import execute_command
 from deploy.util.parser import parse_service_name
 
 running_container_list = []
@@ -132,7 +133,7 @@ def get_container_cpu_usage():
                     line = f.readline()
                     # 在V2版本中，CPU计数的单位是微秒不是纳秒
                     cum_cpu_time = int(line.split(' ')[1])/1000.0
-                    previous_cpu_time = container_id_total_cpu.get(container_name, 0)
+                    previous_cpu_time = container_id_total_cpu.get(container_id, 0)
                     cpu_usage_time = max(cum_cpu_time - previous_cpu_time, 0)
                     container_id_total_cpu[container_id] = cum_cpu_time
                     service_cpu_time[service_name].append(cpu_usage_time)
@@ -355,9 +356,18 @@ def test_to_numpy():
 def test_get_network_usage():
     init_collector()
     print(get_network_usage())
+    print(get_network_usage())
+    print(get_network_usage())
+    print(get_network_usage())
+    print(get_network_usage())
+
 
 def test_get_container_cpu_usage():
     init_collector()
+    print(get_container_cpu_usage())
+    print(get_container_cpu_usage())
+    print(get_container_cpu_usage())
+    print(get_container_cpu_usage())
     print(get_container_cpu_usage())
 
 def test_load_services():
@@ -381,10 +391,19 @@ def test_set_container_pids():
 def test_get_memory_usage():
     init_collector()
     print(get_memory_usage())
+    print(get_memory_usage())
+    print(get_memory_usage())
+    print(get_memory_usage())
+    print(get_memory_usage())
+
 
 def test_get_io_usage():
     init_collector()
     print(get_io_usage())
+    print(get_io_usage())
+    print(get_io_usage())
+    print(get_io_usage())
+
 
 if __name__ == "__main__":
-    test_to_numpy()
+    test_get_network_usage()

@@ -15,6 +15,8 @@ def handle_command(command):
     response = None
     if command == 'init':
         init_collector()
+        print("Collector initialized")
+        response = "Collector initialized"
     
     elif command == 'collect':
         latest_data = {
@@ -23,7 +25,7 @@ def handle_command(command):
             "io": get_io_usage(),
             "network": get_network_usage()
         }
-        response = json.dumps(latest_data, indent=4)
+        response = json.dumps(latest_data)
     return response
 
 def slave_listen(master_host, master_port):
