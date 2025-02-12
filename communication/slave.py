@@ -8,6 +8,17 @@ sys.path.append(PROJECT_ROOT)
 
 from monitor.data_collector import *
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", type=int, default=12345, help="port to listen")
+args = parser.parse_args()
+# 从命令行参数获取端口号
+port = args.port
+host = '0.0.0.0'  # 监听所有可用接口
+
+
+
 def handle_command(command):
     # 在这里解析并执行命令
     print('Executing command:', command)
@@ -54,6 +65,4 @@ def slave_listen(master_host, master_port):
                 conn.sendall(result.encode())
 
 if __name__ == "__main__":
-    master_host = '0.0.0.0'  # 监听所有可用接口
-    master_port = 12345      # 替换为实际的端口号
-    slave_listen(master_host, master_port) 
+    slave_listen(host, port) 
