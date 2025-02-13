@@ -1,8 +1,6 @@
 import random
-from locust import HttpUser, task, tag, between
-import base64
+from locust import HttpUser, task, tag
 import os
-from pathlib import Path
 import logging
 import numpy as np
 import time
@@ -16,20 +14,19 @@ random.seed(time.time())
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-image_dir  = Path('/mnt/social_images')    # for docker usage
+project_root = "~/DeepDynamicRM"
+
+image_dir  = f"{project_root}/locust/base64_images"
+image_dir = os.path.expanduser(image_dir)
+
 image_data = {}
 image_names = []
-
-# logging.basicConfig(level=logging.INFO,
-#                     # filename='/mnt/locust_log/locust_openwhisk_log.txt',
-#                     # filemode='w+',
-#                     format='%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 logging.basicConfig(level=logging.INFO)
 
 # data
 for img in os.listdir(str(image_dir)):
-    full_path = image_dir / img
+    full_path = os.path.join(image_dir, img)
     image_names.append(img)
     with open(str(full_path), 'r') as f:
         image_data[img] = f.read()

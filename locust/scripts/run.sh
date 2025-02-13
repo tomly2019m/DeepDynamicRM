@@ -1,0 +1,1 @@
+locust -f src/socialnetwork.py --host http://127.0.0.1:8080 --users 2  --csv=locust_log --headless -t 100s 
