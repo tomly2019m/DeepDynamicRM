@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import json
 import math
 import os
@@ -129,10 +130,11 @@ def get_container_cpu_usage():
                 container_id = container_name_id[container_name]
                 assert cgroup_version == "v2"
                 pseudo_file = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope/cpu.stat"
+                # print(pseudo_file)
                 with open(pseudo_file, "r") as f:
                     line = f.readline()
-                    # 在V2版本中，CPU计数的单位是微秒不是纳秒
-                    cum_cpu_time = int(line.split(' ')[1])/1000.0
+                    # 在V2版本中，CPU计数的单位是微秒
+                    cum_cpu_time = int(line.split(' ')[1])
                     previous_cpu_time = container_id_total_cpu.get(container_id, 0)
                     cpu_usage_time = max(cum_cpu_time - previous_cpu_time, 0)
                     container_id_total_cpu[container_id] = cum_cpu_time
@@ -251,33 +253,33 @@ def get_replicas():
     return replicas
 
 # 计算一个列表中的最大值
-def calculate_max(data: list | list[tuple], position: int):
-    if isinstance(data[0], tuple):
-        return max(data, key=lambda x: x[position])
+def calculate_max(data: list | list[list], position: int = 0):
+    if isinstance(data[0], list):
+        return max(data, key=lambda x: x[position])[position]
     return max(data)
 
 # 计算一个列表中的最小值
-def calculate_min(data: list | list[tuple], position: int):
-    if isinstance(data[0], tuple):
-        return min(data, key=lambda x: x[position])
+def calculate_min(data: list | list[list], position: int = 0):
+    if isinstance(data[0], list):
+        return min(data, key=lambda x: x[position])[position]
     return min(data)
 
 # 计算一个列表中的平均值
-def calculate_mean(data: list | list[tuple], position: int):
-    if isinstance(data[0], tuple):
-        return sum(data, key=lambda x: x[position]) / len(data)
+def calculate_mean(data: list | list[list], position: int = 0):
+    if isinstance(data[0], list):
+        return sum(x[position] for x in data) / len(data)
     return sum(data) / len(data)
 
 # 计算一个列表中的标准差
-def calculate_std(data: list | list[tuple], position: int):
-    if isinstance(data[0], tuple):
+def calculate_std(data: list | list[list], position: int = 0):
+    if isinstance(data[0], list):
         return math.sqrt(sum((x[position] - calculate_mean(data, position)) ** 2 for x in data) / len(data))
     return math.sqrt(sum((x - calculate_mean(data, position)) ** 2 for x in data) / len(data))
 
 # 将不同节点上的数据合并
 def concat_data(data1: dict, data2: dict):
     for k, v in data2.items():
-        dict.setdefault(k, []).extend(v)
+        data1.setdefault(k, []).extend(v)
     return data1
 
 # 汇聚不同节点上的replicas数据 相同服务，数据相加
@@ -292,9 +294,9 @@ def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str, list[int]
 # 处理数据，计算每个服务的最大值、最小值、平均值、标准差
 def process_data(data: dict):
     for k, v in data.items():
-        if isinstance(v[0], tuple):
+        if isinstance(v[0], list):
             data[k] = [calculate_max(v, 0), calculate_min(v, 0), calculate_mean(v, 0), calculate_std(v, 0)]
-            data[k].append([calculate_max(v, 1), calculate_min(v, 1), calculate_mean(v, 1), calculate_std(v, 1)])
+            data[k].extend([calculate_max(v, 1), calculate_min(v, 1), calculate_mean(v, 1), calculate_std(v, 1)])
         else:
             data[k] = [calculate_max(v), calculate_min(v), calculate_mean(v), calculate_std(v)]
     return data
@@ -316,6 +318,47 @@ def to_numpy(data: dict):
 
     return numpy_data
 
+
+def transform_data(gathered_data):
+    # 定义指标处理顺序和对应原始字段
+    metric_mapping = OrderedDict([
+        ('cpu_usage', ('cpu', 4)),
+        ('memory_usage', ('memory', 4)),
+        ('io_write', ('io', 0)),  # io前4个元素
+        ('io_read', ('io', 4)),    # io后4个元素
+        ('network_recv', ('network', 0)),  # network前4个
+        ('network_send', ('network', 4))   # network后4个
+    ])
+    
+    # 获取所有服务并保持顺序一致
+    all_services = list(gathered_data['cpu'].keys())
+    
+    # 初始化结果数组 (service_num, metric_num, 4)
+    service_num = len(all_services)
+    metric_num = len(metric_mapping)
+    result_array = np.zeros((service_num, metric_num, 4), dtype=np.float64)
+    
+    # 填充数据
+    for service_idx, service_name in enumerate(all_services):
+        for metric_idx, (metric_name, (src_key, offset)) in enumerate(metric_mapping.items()):
+            try:
+                src_data = gathered_data[src_key][service_name]
+                
+                # 处理不同长度的数据
+                if len(src_data) == 8:  # IO和Network数据
+                    metric_data = src_data[offset:offset+4]
+                elif len(src_data) == 4:  # CPU和Memory数据
+                    metric_data = src_data
+                else:
+                    raise ValueError(f"非预期数据长度: {len(src_data)}")
+                
+                result_array[service_idx, metric_idx] = metric_data
+                
+            except KeyError as e:
+                print(f"警告: 服务 {service_name} 缺少指标 {src_key}")
+                result_array[service_idx, metric_idx] = np.nan
+    
+    return result_array
 
 # 初始化数据采集器
 def init_collector():
@@ -406,4 +449,4 @@ def test_get_io_usage():
 
 
 if __name__ == "__main__":
-    test_get_network_usage()
+    test_get_container_cpu_usage()
