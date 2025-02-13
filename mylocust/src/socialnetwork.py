@@ -7,7 +7,7 @@ import time
 import json
 
 import locust.stats
-locust.stats.CSV_STATS_INTERVAL_SEC = 1 # second
+locust.stats.CSV_STATS_INTERVAL_SEC = 0.5 # second
 
 random.seed(time.time())
 

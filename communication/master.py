@@ -13,6 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
 from monitor.data_collector import *
+from mylocust.util.get_latency_data import get_latest_latency
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time", type=int, default=30, help="experiment time")
@@ -26,7 +27,8 @@ username = args.username
 save     = args.save
 
 gathered_list = []  # 用于存储每次循环处理后的 gathered 数据
-replicas_list = []  # 用于存储每次循环的 replicas 数据
+replicas = []
+latency_list = []
 
 class SlaveConnection:
     def __init__(self, slave_host, slave_port):
@@ -53,7 +55,7 @@ class SlaveConnection:
 
 
 async def start_experiment(slaves):
-    global exp_time, gathered_list, replicas_list
+    global exp_time, gathered_list, replicas
     connections : Dict[Tuple[str, int], SlaveConnection] = {}
     tasks = []
 
@@ -68,6 +70,7 @@ async def start_experiment(slaves):
     await asyncio.gather(*tasks)
     tasks.clear()
 
+    current_exp_time = 0
     try:
         while True:
             gathered = {
@@ -88,8 +91,11 @@ async def start_experiment(slaves):
                 gathered['memory'] = concat_data(gathered['memory'], data_dict['memory'])
                 gathered['io'] = concat_data(gathered['io'], data_dict['io'])
                 gathered['network'] = concat_data(gathered['network'], data_dict['network'])
-            replicas = np.array([len(cpu_list) for cpu_list in gathered['cpu'].values()]).flatten()
+            if replicas == []:
+                replicas = np.array([len(cpu_list) for cpu_list in gathered['cpu'].values()]).flatten()
             # print(replicas)
+            print(f"当前实验进度: {current_exp_time}/{exp_time}")
+            print(gathered)
             for k, v in gathered['cpu'].items():
                 gathered['cpu'][k] = [item / 1e6 for item in v]
             gathered['cpu'] = process_data(gathered['cpu'])
@@ -99,9 +105,10 @@ async def start_experiment(slaves):
             gathered = transform_data(gathered)
             # print(time.time() - s)
             gathered_list.append(gathered)  # 将处理后的 gathered 数据存储到列表中
-            replicas_list.append(replicas)  # 将处理后的 replicas 数据存储到列表中
+            latency_list.append(get_latest_latency())
             time.sleep(1)
             exp_time -= 1
+            current_exp_time += 1
             
             # 实验结束
             if exp_time == 0:
@@ -148,7 +155,7 @@ def setup_slave():
         finally:
             ssh.close()
 
-def save_data(gathered_list, replicas_list):
+def save_data(gathered_list, replicas):
     """保存实验数据到本地文件"""
     # 创建数据目录(如果不存在)
     if not os.path.exists('./data'):
@@ -161,11 +168,16 @@ def save_data(gathered_list, replicas_list):
     
     # 保存replicas数据 
     replicas_path = f'./data/replicas.npy'
-    np.save(replicas_path, replicas_list)
+    np.save(replicas_path, replicas)
     print(f"已保存replicas数据到: {replicas_path}")
 
+    # 保存延迟latency数据
+    latency_path = f'./data/latency.npy'
+    np.save(latency_path, latency_list)
+    print(f"已保存latency数据到: {latency_path}")
+
 async def main():
-    global gathered_list, replicas_list
+    global gathered_list, replicas
     # 从配置文件中读取主机名和端口，然后创建连接
     comm_config = ''
     with open("./comm.json", 'r') as f:
@@ -180,7 +192,7 @@ async def main():
     time.sleep(5)
     await start_experiment(slaves)
     if save:
-        save_data(gathered_list, replicas_list)
+        save_data(gathered_list, replicas)
 
 def test_setup_slave():
     # setup_slave()
