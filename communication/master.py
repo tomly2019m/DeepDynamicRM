@@ -153,17 +153,14 @@ def save_data(gathered_list, replicas_list):
     # 创建数据目录(如果不存在)
     if not os.path.exists('./data'):
         os.makedirs('./data')
-        
-    # 生成时间戳作为文件名
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    
+
     # 保存gathered数据
-    gathered_path = f'./data/gathered_{timestamp}.npy'
+    gathered_path = f'./data/gathered.npy'
     np.save(gathered_path, gathered_list)
     print(f"已保存gathered数据到: {gathered_path}")
     
     # 保存replicas数据 
-    replicas_path = f'./data/replicas_{timestamp}.npy'
+    replicas_path = f'./data/replicas.npy'
     np.save(replicas_path, replicas_list)
     print(f"已保存replicas数据到: {replicas_path}")
 
