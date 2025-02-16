@@ -176,6 +176,10 @@ def save_data(gathered_list, replicas):
     np.save(latency_path, latency_list)
     print(f"已保存latency数据到: {latency_path}")
 
+class Executor:
+    pass
+
+
 async def main():
     global gathered_list, replicas
     # 从配置文件中读取主机名和端口，然后创建连接
@@ -212,7 +216,7 @@ def test_setup_slave():
                 s.settimeout(5)  # 设置超时时间为5秒
                 result = s.connect_ex((host, port))
                 
-                if result == 0:
+                if result == 0: 
                     print(f"✅ {host}:{port} 连接成功")
                 else:
                     print(f"❌ {host}:{port} 连接失败")
