@@ -1,6 +1,11 @@
+import os
 import random
+import sys
 import numpy as np
+import json
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 class MAB:
     def __init__(self):
@@ -180,11 +185,8 @@ import numpy as np
 class UCB_Bandit:
     """
     UCB算法实现的多臂赌博机
-    
-    参数：
-    true_means (list): 每个臂的真实奖励均值（决定实际奖励分布）
     """
-    def __init__(self, allocate_dict):
+    def __init__(self, allocate_dict, replica_dict):
         self.actions = [
             # 固定增加
             {"type" : "increase", "value" : 1},
@@ -206,7 +208,8 @@ class UCB_Bandit:
             {"type" : "recover", "value" : 0}
         ]
 
-        self.allocate_dict = allocate_dict #初始分配字典
+        self.allocate_dict : dict[str, int] = allocate_dict  #初始分配字典
+        self.replica_dict : dict[str, int]  = replica_dict
 
         self.k = len(self.actions)        # 臂的数量
         self.counts = np.zeros(self.k)  # 每个臂的尝试次数
@@ -214,7 +217,27 @@ class UCB_Bandit:
         self.total_counts = 0           # 总尝试次数
 
         self.last_allocate = self.allocate_dict # 上一次的分配 用于recover动作
-    
+        self.config = self.setup_config()
+
+
+    def setup_config(self):
+        """
+        从 'communication/mab.json' 文件中读取配置，返回配置字典。
+        """
+        config_file_path = os.path.join(PROJECT_ROOT, "communication", "mab.json")
+        
+        try:
+            with open(config_file_path, 'r') as f:
+                config = json.load(f)  # 解析 JSON 文件
+            return config
+        except FileNotFoundError:
+            print(f"配置文件 '{config_file_path}' 未找到！")
+            return {}
+        except json.JSONDecodeError:
+            print(f"配置文件 '{config_file_path}' 解析失败！")
+            return {}
+
+
     def select_arm(self):
         """选择要拉动的臂（基于UCB公式）"""
         ucb_values = np.zeros(self.k)
@@ -241,10 +264,95 @@ class UCB_Bandit:
         n = self.counts[chosen_arm]
         self.values[chosen_arm] += (reward - self.values[chosen_arm]) / n
     
-    def pull_arm(self, chosen_arm):
-        """模拟拉动臂的实际奖励（可自定义奖励分布）"""
-        # 使用正态分布：均值=真实均值，标准差=1
-        return np.random.normal(loc=self.true_means[chosen_arm], scale=1.0)
+
+    # 根据分配的CPU数量和latency来计算奖励
+    def calculate_reward(self, latency):
+        """
+        根据分配的CPU数量和延迟来计算奖励
+        CPU数量映射：从0到max_cpu映射到1到0
+        延迟映射：从0到500映射到0.5到0，超过500则返回-1的奖励
+        """
+        # 计算当前的总CPU分配
+        total_cpu_allocation = 0
+        for service in self.allocate_dict:
+            total_cpu_allocation += self.allocate_dict[service] * self.replica_dict.get(service, 1)
+
+        # 获取配置中的最大CPU数
+        max_cpu = self.config.get('max_cpu', 100)  # 默认值为100，如果配置文件中没有该项
+
+        # 计算CPU奖励（映射：0->max_cpu 映射到 1->0）
+        if total_cpu_allocation <= max_cpu:
+            cpu_reward = 1 - (total_cpu_allocation / max_cpu)
+        else:
+            cpu_reward = 0  # 超过最大CPU分配时，奖励为0
+
+        # 延迟奖励映射：如果延迟小于500，按比例映射；如果超过500，返回-1
+        if latency < 500:
+            latency_reward = 0.5 - (latency / 1000)  # 映射到0.5到0之间
+        elif latency >= 500:
+            latency_reward = -1  # 超过500的延迟，奖励为-1
+
+        # 总奖励为CPU奖励和延迟奖励的加权和
+        total_reward = self.config['cpu_factor'] * cpu_reward + self.config['latency_factor'] * latency_reward
+
+        return total_reward
+
+
+    def execute_action(self, chosen_arm, cpu_state):
+        """
+        根据选择的 arm 下标和 cpu_state 执行相应的动作
+        cpu_state 是一个字典，包含所有服务的 CPU 利用率，如 {'service1': 0.8, 'service2': 0.5, ...}
+        """
+        action = self.actions[chosen_arm]  # 获取选定的动作
+        action_type = action["type"]
+        action_value = action["value"]
+        
+        # 判断动作类型并根据 cpu_state 执行相应的调整
+        if action_type == "increase":
+            # 固定增加 CPU 使用率
+            service = list(cpu_state.keys())[0]  # 假设我们只增加第一个服务的CPU
+            cpu_state[service] = min(1.0, cpu_state[service] + action_value)  # 不超过 100%
+        
+        elif action_type == "decrease":
+            # 固定减少 CPU 使用率
+            service = list(cpu_state.keys())[0]  # 假设我们只减少第一个服务的CPU
+            cpu_state[service] = max(0.0, cpu_state[service] - action_value)  # 不低于 0%
+
+        elif action_type == "increase_batch":
+            # 批量增加 CPU 使用率
+            for service in cpu_state:
+                cpu_state[service] = min(1.0, cpu_state[service] + action_value)  # 不超过 100%
+
+        elif action_type == "decrease_batch":
+            # 批量减少 CPU 使用率
+            for service in cpu_state:
+                cpu_state[service] = max(0.0, cpu_state[service] - action_value)  # 不低于 0%
+
+        elif action_type == "increase_percent":
+            # 百分比增加 CPU 使用率
+            for service in cpu_state:
+                cpu_state[service] = min(1.0, cpu_state[service] * (1 + action_value))  # 不超过 100%
+
+        elif action_type == "decrease_percent":
+            # 百分比减少 CPU 使用率
+            for service in cpu_state:
+                cpu_state[service] = max(0.0, cpu_state[service] * (1 - action_value))  # 不低于 0%
+
+        elif action_type == "reset":
+            # 重置 CPU 使用率
+            for service in cpu_state:
+                cpu_state[service] = 0.0  # 重置为 0%
+
+        elif action_type == "hold":
+            # 保持当前状态，不做任何改变
+            pass
+
+        elif action_type == "recover":
+            # 恢复到上一次的 CPU 分配
+            cpu_state = self.last_allocate  # 假设 self.last_allocate 保存了上一次的分配
+
+        return cpu_state
+
 
 # 示例使用
 if __name__ == "__main__":
