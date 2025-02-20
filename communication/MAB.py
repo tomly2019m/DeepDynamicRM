@@ -1,10 +1,8 @@
-# 上下文感知的混合赌博机
-
 import random
 import numpy as np
 
 
-class HCB:
+class MAB:
     def __init__(self):
         self.actions = [
             # 固定增加
@@ -37,7 +35,7 @@ class HCB:
         ]
 
         # cpu成本因子
-        self.cpu_cost_factor = 0.5
+        self.cpu_cost_factor = 1
         # 延迟成本因子
         self.latency_cost_factor = 1
         
@@ -175,75 +173,102 @@ class HCB:
 
         return action, reward, new_cpu_allocation, new_latency
 
-# 以下给出一个简单的模拟环境示例，仅用于演示 HCB 的调用方式
-class DummyEnv:
-    def __init__(self):
-        # 初始模拟状态
-        self.cpu_allocation = {"service1": 40, "service2": 55, "service3": 60}
-        self.latency = 30  # 初始延迟
 
-    def get_context(self):
-        # 模拟生成上下文数据（在实际环境中可根据监控数据构造）
-        context = {
-            "cpu_mean": np.mean(list(self.cpu_allocation.values())),
-            "cpu_max": max(self.cpu_allocation.values()),
-            "cpu_min": min(self.cpu_allocation.values()),
-            "latencys": self.latency
-        }
-        return context
 
-    def execute_action(self, action: dict):
-        """
-        根据动作更新 cpu_allocation 和 latency。
-        注意：这里仅作简单模拟，不代表实际逻辑。
-        """
-        action_type = action["type"]
-        value = action["value"]
+import numpy as np
 
-        # 简单模拟：调整cpu_allocation和延迟的关系
-        if action_type == "increase":
-            # 增加某个服务的cpu分配
-            self.cpu_allocation["service1"] += value
-            self.latency = max(50, self.latency - 10)
-        elif action_type == "decrease":
-            self.cpu_allocation["service1"] = max(0, self.cpu_allocation["service1"] - value)
-            self.latency += 10
-        elif action_type == "increase_batch":
-            for key in self.cpu_allocation:
-                self.cpu_allocation[key] += value
-            self.latency = max(50, self.latency - 5)
-        elif action_type == "decrease_batch":
-            for key in self.cpu_allocation:
-                self.cpu_allocation[key] = max(0, self.cpu_allocation[key] - value)
-            self.latency += 5
-        elif action_type == "increase_percent":
-            for key in self.cpu_allocation:
-                self.cpu_allocation[key] = int(self.cpu_allocation[key] * (1 + value))
-            self.latency = max(50, self.latency - 8)
-        elif action_type == "decrease_percent":
-            for key in self.cpu_allocation:
-                self.cpu_allocation[key] = int(self.cpu_allocation[key] * (1 - value))
-            self.latency += 8
-        elif action_type == "reset":
-            # 重置到初始状态
-            self.cpu_allocation = {"service1": 40, "service2": 55, "service3": 60}
-            self.latency = 30
-        elif action_type == "hold":
-            # 保持不变
-            pass
-        elif action_type == "recover":
-            # 恢复到上一次状态（这里简单模拟为重置）
-            self.cpu_allocation = {"service1": 40, "service2": 55, "service3": 60}
-            self.latency = 30
-        return self.cpu_allocation.copy(), self.latency
-
-# 测试示例
-if __name__ == "__main__":
-    bandit = HCB()
-    env = DummyEnv()
+class UCB_Bandit:
+    """
+    UCB算法实现的多臂赌博机
     
-    for i in range(500):
-        action, reward, cpu_alloc, latency = bandit.run_step(env)
-        print(f"步骤 {i+1}: 选择动作 {action}，获得奖励 {reward:.2f}")
-        print(f"当前状态：cpu_allocation = {cpu_alloc}，latency = {latency}")
-        print("-" * 50)
+    参数：
+    true_means (list): 每个臂的真实奖励均值（决定实际奖励分布）
+    """
+    def __init__(self, allocate_dict):
+        self.actions = [
+            # 固定增加
+            {"type" : "increase", "value" : 1},
+            # 固定减少
+            {"type" : "decrease", "value" : 0.5},
+            # 批量增加
+            {"type" : "increase_batch", "value" : 1},
+            # 批量减少
+            {"type" : "decrease_batch", "value" : 0.5},
+            # 百分比增加
+            {"type" : "increase_percent", "value" : 0.25},
+            # 百分比减少
+            {"type" : "decrease_percent", "value" : 0.1},
+            # 重置
+            {"type" : "reset", "value" : 0},
+            # 保持
+            {"type" : "hold", "value" : 0},
+            # 恢复到上一次的分配
+            {"type" : "recover", "value" : 0}
+        ]
+
+        self.allocate_dict = allocate_dict #初始分配字典
+
+        self.k = len(self.actions)        # 臂的数量
+        self.counts = np.zeros(self.k)  # 每个臂的尝试次数
+        self.values = np.zeros(self.k)  # 当前价值估计
+        self.total_counts = 0           # 总尝试次数
+
+        self.last_allocate = self.allocate_dict # 上一次的分配 用于recover动作
+    
+    def select_arm(self):
+        """选择要拉动的臂（基于UCB公式）"""
+        ucb_values = np.zeros(self.k)
+        
+        for arm in range(self.k):
+            if self.counts[arm] == 0:   # 未尝试过的臂优先选择
+                ucb_values[arm] = float('inf')
+            else:
+                # UCB公式：价值估计 + 探索项
+                exploration = np.sqrt(2 * np.log(self.total_counts) / self.counts[arm])
+                ucb_values[arm] = self.values[arm] + exploration
+        
+        # 选择UCB值最大的臂（若有多个则随机选择）
+        max_ucb = np.max(ucb_values)
+        candidates = np.where(ucb_values == max_ucb)
+        return np.random.choice(candidates)
+    
+    def update(self, chosen_arm, reward):
+        """更新选定臂的统计信息"""
+        self.counts[chosen_arm] += 1    # 更新尝试次数
+        self.total_counts += 1          # 更新总次数
+        
+        # 增量式更新价值估计（避免存储所有奖励）
+        n = self.counts[chosen_arm]
+        self.values[chosen_arm] += (reward - self.values[chosen_arm]) / n
+    
+    def pull_arm(self, chosen_arm):
+        """模拟拉动臂的实际奖励（可自定义奖励分布）"""
+        # 使用正态分布：均值=真实均值，标准差=1
+        return np.random.normal(loc=self.true_means[chosen_arm], scale=1.0)
+
+# 示例使用
+if __name__ == "__main__":
+    np.random.seed(42)  # 设置随机种子保证可重复性
+    
+    # 创建赌博机实例（5个臂，真实均值为1-5）
+    bandit = UCB_Bandit(true_means=[1.0, 2.0, 3.0, 4.0, 5.0])
+    
+    # 进行1000次试验
+    num_trials = 1000
+    rewards = []  # 记录每次奖励
+    
+    for _ in range(num_trials):
+        arm = bandit.select_arm()       # 选择臂
+        reward = bandit.pull_arm(arm)   # 获得奖励
+        bandit.update(arm, reward)      # 更新统计信息
+        rewards.append(reward)          # 记录奖励
+    
+    # 结果分析
+    print(f"各臂尝试次数: {bandit.counts}")
+    print(f"平均奖励: {np.mean(rewards):.2f}")
+    print(f"最优臂选择比例: {bandit.counts[-1]/num_trials:.2%}")
+
+# 典型输出：
+# 各臂尝试次数: [  3.   3.   4.  32. 958.]
+# 平均奖励: 4.94
+# 最优臂选择比例: 95.80%
