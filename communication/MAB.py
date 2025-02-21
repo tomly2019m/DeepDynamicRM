@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os
 import random
 import sys
@@ -208,7 +209,7 @@ class UCB_Bandit:
             {"type" : "recover", "value" : 0}
         ]
 
-        self.allocate_dict : dict[str, int] = allocate_dict  #初始分配字典
+        self.allocate_dict : dict[str, float] = allocate_dict  #初始分配字典
         self.replica_dict : dict[str, int]  = replica_dict
 
         self.k = len(self.actions)        # 臂的数量
@@ -218,6 +219,15 @@ class UCB_Bandit:
 
         self.last_allocate = self.allocate_dict # 上一次的分配 用于recover动作
         self.config = self.setup_config()
+
+        # 保存资源配置历史
+        self.allocation_history = []
+
+        # 保存从部署配置文件中读取默认服务配置
+        self.default_cpu_config = {}
+
+        # 保存可调节的服务列表
+        self.scalable_service = []
 
 
     def setup_config(self):
@@ -236,6 +246,34 @@ class UCB_Bandit:
         except json.JSONDecodeError:
             print(f"配置文件 '{config_file_path}' 解析失败！")
             return {}
+        
+
+    def _load_deployment_config(self):
+        """
+        从 'deploy/config/socialnetwork.json' 加载服务配置
+        """
+        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "socialnetwork.json")
+        
+        try:
+            with open(config_file_path, 'r') as f:
+                config = json.load(f)
+                
+            # 提取可扩展服务列表
+            self.scalable_service = config.get("scalable_service", [])
+            
+            # 提取完整服务配置
+            self.default_cpu_config = config.get("service", {})
+            
+            print(f"成功加载部署配置，发现 {len(self.scalable_service)} 个可扩展服务")
+            
+        except FileNotFoundError:
+            print(f"[警告] 部署配置文件 {config_file_path} 未找到！")
+            self.scalable_service = []
+            self.default_cpu_config = {}
+        except json.JSONDecodeError as e:
+            print(f"[错误] 配置文件解析失败: {str(e)}")
+            self.scalable_service = []
+            self.default_cpu_config = {}
 
 
     def select_arm(self):
@@ -298,60 +336,101 @@ class UCB_Bandit:
         return total_reward
 
 
-    def execute_action(self, chosen_arm, cpu_state):
+    def execute_action(self, chosen_arm: int, cpu_state: dict[str, list[float]]):
         """
-        根据选择的 arm 下标和 cpu_state 执行相应的动作
-        cpu_state 是一个字典，包含所有服务的 CPU 利用率，如 {'service1': 0.8, 'service2': 0.5, ...}
+        执行选定动作并返回新的资源分配
+        
+        参数：
+        chosen_arm -- 选择的动作索引
+        cpu_state -- CPU状态字典，格式如：
+            {"service1": [max_util, min_util, mean_util, std_util], ...}
+        
+        返回：
+        new_allocation -- 新的资源分配字典
         """
-        action = self.actions[chosen_arm]  # 获取选定的动作
+        action = self.actions[chosen_arm]
         action_type = action["type"]
         action_value = action["value"]
         
-        # 判断动作类型并根据 cpu_state 执行相应的调整
-        if action_type == "increase":
-            # 固定增加 CPU 使用率
-            service = list(cpu_state.keys())[0]  # 假设我们只增加第一个服务的CPU
-            cpu_state[service] = min(1.0, cpu_state[service] + action_value)  # 不超过 100%
+        # 保存当前状态到历史记录（用于recover）
+        self.allocation_history.append(deepcopy(self.allocate_dict))
+        if len(self.allocation_history) > 10:  # 保留最近10次记录
+            self.allocation_history.pop(0)
         
+        # 计算所有服务的负载水平（利用率 / 分配资源）
+        load = {}
+        for service in self.allocate_dict:
+            mean_util = cpu_state[service][2]  # 获取平均利用率
+            load[service] = (mean_util * 100) / self.allocate_dict[service]
+        
+        # 执行动作逻辑
+        new_allocation = deepcopy(self.allocate_dict)
+        
+        if action_type == "increase":
+            # 找到负载最高的服务增加资源
+            target_service = max(load, key=lambda k: load[k])
+
+            new_cpu = self.allocate_dict[target_service] + action["value"]
+            
+            new_allocation[target_service] += action_value
+            
         elif action_type == "decrease":
-            # 固定减少 CPU 使用率
-            service = list(cpu_state.keys())[0]  # 假设我们只减少第一个服务的CPU
-            cpu_state[service] = max(0.0, cpu_state[service] - action_value)  # 不低于 0%
-
+            # 找到负载最低的服务减少资源
+            target_service = min(load, key=lambda k: load[k])
+            new_allocation[target_service] = max(
+                0.1,  # 保持最小分配量
+                new_allocation[target_service] - action_value
+            )
+            
         elif action_type == "increase_batch":
-            # 批量增加 CPU 使用率
-            for service in cpu_state:
-                cpu_state[service] = min(1.0, cpu_state[service] + action_value)  # 不超过 100%
-
+            # 增加前3个高负载服务
+            candidates = sorted(load, key=lambda k: -load[k])[:3]
+            for service in candidates:
+                new_allocation[service] += action_value * 2  # 批量系数
+            
         elif action_type == "decrease_batch":
-            # 批量减少 CPU 使用率
-            for service in cpu_state:
-                cpu_state[service] = max(0.0, cpu_state[service] - action_value)  # 不低于 0%
-
+            # 减少前3个低负载服务
+            candidates = sorted(load, key=lambda k: load[k])[:3]
+            for service in candidates:
+                new_allocation[service] = max(
+                    0.1,
+                    new_allocation[service] - action_value * 2
+                )
+            
         elif action_type == "increase_percent":
-            # 百分比增加 CPU 使用率
-            for service in cpu_state:
-                cpu_state[service] = min(1.0, cpu_state[service] * (1 + action_value))  # 不超过 100%
-
+            # 按百分比增加高负载服务
+            target_service = max(load, key=lambda k: load[k])
+            new_allocation[target_service] *= (1 + action_value)
+            
         elif action_type == "decrease_percent":
-            # 百分比减少 CPU 使用率
-            for service in cpu_state:
-                cpu_state[service] = max(0.0, cpu_state[service] * (1 - action_value))  # 不低于 0%
-
+            # 按百分比减少低负载服务
+            target_service = min(load, key=lambda k: load[k])
+            new_allocation[target_service] *= (1 - action_value)
+            
         elif action_type == "reset":
-            # 重置 CPU 使用率
-            for service in cpu_state:
-                cpu_state[service] = 0.0  # 重置为 0%
-
+            # 重置到初始配置
+            new_allocation = deepcopy(self.initial_allocation)
+            
         elif action_type == "hold":
-            # 保持当前状态，不做任何改变
+            # 保持当前状态
             pass
-
+            
         elif action_type == "recover":
-            # 恢复到上一次的 CPU 分配
-            cpu_state = self.last_allocate  # 假设 self.last_allocate 保存了上一次的分配
-
-        return cpu_state
+            # 恢复到上一次有效分配
+            if len(self.allocation_history) >= 2:
+                new_allocation = deepcopy(self.allocation_history[-2])
+                self.allocation_history.pop(-1)  # 移除当前无效记录
+        
+        # 验证分配有效性
+        for service in new_allocation:
+            if new_allocation[service] < 0.1:  # 资源分配下限保护
+                new_allocation[service] = 0.1
+        
+        # 更新状态记录
+        self.last_allocate = deepcopy(self.allocate_dict)
+        self.allocate_dict = new_allocation
+        
+        return new_allocation
 
 
 # 示例使用
