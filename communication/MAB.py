@@ -8,6 +8,8 @@ import json
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
+from monitor.data_collector import set_cpu_limit
+
 class MAB:
     def __init__(self):
         self.actions = [
@@ -187,7 +189,7 @@ class UCB_Bandit:
     """
     UCB算法实现的多臂赌博机
     """
-    def __init__(self, allocate_dict, replica_dict):
+    def __init__(self):
         self.actions = [
             # 固定增加
             {"type" : "increase", "value" : 1},
@@ -209,8 +211,10 @@ class UCB_Bandit:
             {"type" : "recover", "value" : 0}
         ]
 
-        self.allocate_dict : dict[str, float] = allocate_dict  #初始分配字典
-        self.replica_dict : dict[str, int]  = replica_dict
+        self.allocate_dict : dict[str, float] = {}  # 每个服务总的cpu分配
+        self.replica_dict : dict[str, int]  = {}
+
+        self.initial_allocation : dict[str, float] = {} # 初始分配方案
 
         self.k = len(self.actions)        # 臂的数量
         self.counts = np.zeros(self.k)  # 每个臂的尝试次数
@@ -224,7 +228,7 @@ class UCB_Bandit:
         self.allocation_history = []
 
         # 保存从部署配置文件中读取默认服务配置
-        self.default_cpu_config = {}
+        self.default_cpu_config : dict[str, dict[str, float]] = {}
 
         # 保存可调节的服务列表
         self.scalable_service = []
@@ -250,7 +254,7 @@ class UCB_Bandit:
 
     def _load_deployment_config(self):
         """
-        从 'deploy/config/socialnetwork.json' 加载服务配置
+        从配置文件中加载并生成 allocate_dict 和 replica_dict
         """
         config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "socialnetwork.json")
         
@@ -264,16 +268,23 @@ class UCB_Bandit:
             # 提取完整服务配置
             self.default_cpu_config = config.get("service", {})
             
-            print(f"成功加载部署配置，发现 {len(self.scalable_service)} 个可扩展服务")
+            # 自动生成 allocate_dict 和 replica_dict
+            for service_name, service_conf in self.default_cpu_config.items():
+                # CPU分配：直接使用配置中的 cpus 字段
+                self.allocate_dict[service_name] = service_conf.get("cpus", 0.0)
+                self.initial_allocation = deepcopy(self.allocate_dict)
+                
+                # 副本数：使用配置中的 replica 字段
+                self.replica_dict[service_name] = service_conf.get("replica", 1)
+            
+            print(f"已自动生成初始分配：{len(self.allocate_dict)} 个服务的CPU配置")
             
         except FileNotFoundError:
-            print(f"[警告] 部署配置文件 {config_file_path} 未找到！")
-            self.scalable_service = []
-            self.default_cpu_config = {}
+            print(f"[错误] 部署配置文件 {config_file_path} 不存在！")
+            raise  # 配置文件不存在时直接抛出异常
         except json.JSONDecodeError as e:
             print(f"[错误] 配置文件解析失败: {str(e)}")
-            self.scalable_service = []
-            self.default_cpu_config = {}
+            raise
 
 
     def select_arm(self):
@@ -313,7 +324,7 @@ class UCB_Bandit:
         # 计算当前的总CPU分配
         total_cpu_allocation = 0
         for service in self.allocate_dict:
-            total_cpu_allocation += self.allocate_dict[service] * self.replica_dict.get(service, 1)
+            total_cpu_allocation += self.allocate_dict[service]
 
         # 获取配置中的最大CPU数
         max_cpu = self.config.get('max_cpu', 100)  # 默认值为100，如果配置文件中没有该项
@@ -369,43 +380,40 @@ class UCB_Bandit:
         if action_type == "increase":
             # 找到负载最高的服务增加资源
             target_service = max(load, key=lambda k: load[k])
-
             new_cpu = self.allocate_dict[target_service] + action["value"]
-            
-            new_allocation[target_service] += action_value
+            new_cpu = min(new_cpu, self.default_cpu_config[target_service]["max_cpus"])
+            new_allocation[target_service] = new_cpu
             
         elif action_type == "decrease":
             # 找到负载最低的服务减少资源
             target_service = min(load, key=lambda k: load[k])
             new_allocation[target_service] = max(
-                0.1,  # 保持最小分配量
+                0.2,  # 保持最小分配量
                 new_allocation[target_service] - action_value
             )
             
         elif action_type == "increase_batch":
-            # 增加前3个高负载服务
-            candidates = sorted(load, key=lambda k: -load[k])[:3]
+            # 增加前所有可调服务的CPU配额
+            candidates = self.scalable_service
             for service in candidates:
-                new_allocation[service] += action_value * 2  # 批量系数
-            
+                new_allocation[service] = min(self.default_cpu_config[service]["max_cpus"], 
+                                              new_allocation[service] + action["value"])            
+        
         elif action_type == "decrease_batch":
-            # 减少前3个低负载服务
-            candidates = sorted(load, key=lambda k: load[k])[:3]
+            candidates = self.scalable_service
             for service in candidates:
-                new_allocation[service] = max(
-                    0.1,
-                    new_allocation[service] - action_value * 2
-                )
+                new_allocation[service] = max(0.2, new_allocation[service] - action["value"])
             
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
             target_service = max(load, key=lambda k: load[k])
-            new_allocation[target_service] *= (1 + action_value)
+            new_allocation[target_service] = min(self.default_cpu_config[target_service]["max_cpus"], 
+                                                 new_allocation[target_service] * (1 + action["value"]))
             
         elif action_type == "decrease_percent":
             # 按百分比减少低负载服务
             target_service = min(load, key=lambda k: load[k])
-            new_allocation[target_service] *= (1 - action_value)
+            new_allocation[target_service] = max(0.2, new_allocation[target_service] * (1 - action["value"]))
             
         elif action_type == "reset":
             # 重置到初始配置
@@ -423,12 +431,15 @@ class UCB_Bandit:
         
         # 验证分配有效性
         for service in new_allocation:
-            if new_allocation[service] < 0.1:  # 资源分配下限保护
-                new_allocation[service] = 0.1
+            if new_allocation[service] < 0.2:  # 资源分配下限保护
+                new_allocation[service] = 0.2
         
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)
         self.allocate_dict = new_allocation
+
+        # 配置转化 原本配置 代表一个服务总的cpu分配 转化为每replica的cpu分配
+        
         
         return new_allocation
 

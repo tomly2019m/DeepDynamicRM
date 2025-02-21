@@ -1,4 +1,5 @@
 import argparse
+from asyncio import subprocess
 import json
 import os
 import socket
@@ -8,6 +9,7 @@ import asyncio
 from typing import Dict, Tuple
 import paramiko
 from sync import distribute_project
+from MAB import UCB_Bandit
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -70,6 +72,44 @@ async def start_experiment(slaves):
     await asyncio.gather(*tasks)
     tasks.clear()
 
+    # 启动locust负载，同时使用MAB探索
+    locust_cmd = [
+            "locust",          # 命令名称
+            "-f",              # 参数：指定locust文件路径
+            "src/socialnetwork.py",  # 你的Locust文件路径
+            "--host",           # 参数：目标主机
+            "http://127.0.0.1:8080",
+            "--users",          # 用户数参数
+            "2",
+            "--csv",           # 输出CSV文件
+            "locust_log",
+            "--headless",       # 无头模式
+            "-t",               # 测试时长
+            f"{exp_time + 100}s"             # 100秒运行时间
+        ]
+    
+    try:
+        # 创建子进程，不等待立即返回
+        process = await asyncio.to_thread(
+            lambda: subprocess.Popen(
+                locust_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,  # 自动解码文本
+                start_new_session=True  # 独立会话
+            )
+        )
+        
+        # 可选：立即返回成功信息（或根据需要返回进程ID）
+        print(f"Locust进程已启动 (PID: {process.pid})")
+        
+    except Exception as e:
+        # 捕获启动错误（如命令不存在、路径错误等）
+        print(f"启动Locust失败: {str(e)}")
+        raise
+
+    mab = UCB_Bandit()
+
     current_exp_time = 0
     try:
         while True:
@@ -98,14 +138,22 @@ async def start_experiment(slaves):
             print(gathered)
             for k, v in gathered['cpu'].items():
                 gathered['cpu'][k] = [item / 1e6 for item in v]
+
+            arm_id = mab.select_arm()
+            mab.execute_action(arm_id, gathered["cpu"])
+            latency = get_latest_latency()
+            reward = mab.calculate_reward(latency)
+            mab.update(arm_id, reward)
+            
             gathered['cpu'] = process_data(gathered['cpu'])
             gathered['memory'] = process_data(gathered['memory'])
             gathered['io'] = process_data(gathered['io'])
             gathered['network'] = process_data(gathered['network'])
+
             gathered = transform_data(gathered)
             # print(time.time() - s)
             gathered_list.append(gathered)  # 将处理后的 gathered 数据存储到列表中
-            latency_list.append(get_latest_latency())
+            latency_list.append(latency)
             time.sleep(1)
             exp_time -= 1
             current_exp_time += 1
