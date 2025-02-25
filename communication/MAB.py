@@ -4,6 +4,7 @@ import random
 import sys
 import numpy as np
 import json
+import unittest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -439,34 +440,4 @@ class UCB_Bandit:
         self.allocate_dict = new_allocation
 
         # 配置转化 原本配置 代表一个服务总的cpu分配 转化为每replica的cpu分配
-        
-        
         return new_allocation
-
-
-# 示例使用
-if __name__ == "__main__":
-    np.random.seed(42)  # 设置随机种子保证可重复性
-    
-    # 创建赌博机实例（5个臂，真实均值为1-5）
-    bandit = UCB_Bandit(true_means=[1.0, 2.0, 3.0, 4.0, 5.0])
-    
-    # 进行1000次试验
-    num_trials = 1000
-    rewards = []  # 记录每次奖励
-    
-    for _ in range(num_trials):
-        arm = bandit.select_arm()       # 选择臂
-        reward = bandit.pull_arm(arm)   # 获得奖励
-        bandit.update(arm, reward)      # 更新统计信息
-        rewards.append(reward)          # 记录奖励
-    
-    # 结果分析
-    print(f"各臂尝试次数: {bandit.counts}")
-    print(f"平均奖励: {np.mean(rewards):.2f}")
-    print(f"最优臂选择比例: {bandit.counts[-1]/num_trials:.2%}")
-
-# 典型输出：
-# 各臂尝试次数: [  3.   3.   4.  32. 958.]
-# 平均奖励: 4.94
-# 最优臂选择比例: 95.80%

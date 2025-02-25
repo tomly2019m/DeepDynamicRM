@@ -1,192 +1,206 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+import os
+import sys
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-import pandas as pd
-import numpy as np
 
-# Check if GPU is available and set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-# Load the processed dataset
-processed_data = pd.read_csv('processed_data.csv')
-
-# Split features and labels
-X = processed_data.drop(columns=['label']).values
-y = processed_data['label'].values
-
-# Normalize the features
-scaler = StandardScaler()
-X = scaler.fit_transform(X)
-
-# Convert to NumPy arrays before train_test_split
-X = X.astype(np.float32)
-y = y.astype(np.int64)
-
-# Split data into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-
-# Convert back to PyTorch tensors and move to GPU
-X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
-X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
-y_train = torch.tensor(y_train, dtype=torch.long).to(device)
-y_test = torch.tensor(y_test, dtype=torch.long).to(device)
-
-# Create DataLoader for training and testing
-train_dataset = TensorDataset(X_train, y_train)
-test_dataset = TensorDataset(X_test, y_test)
-
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 
-# Define the self-attention mechanism
-class SelfAttention(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(SelfAttention, self).__init__()
-        self.query = nn.Linear(input_dim, output_dim)
-        self.key = nn.Linear(input_dim, output_dim)
-        self.value = nn.Linear(input_dim, output_dim)
-        self.softmax = nn.Softmax(dim=-1)
+# ----------------------------------
+# 步骤1：加载原始数据
+# ----------------------------------
+data_dir = f"{PROJECT_ROOT}/communication/data"
 
-    def forward(self, x):
-        # x shape: (batch_size, seq_len, input_dim)
-        queries = self.query(x)  # (batch_size, seq_len, output_dim)
-        keys = self.key(x)  # (batch_size, seq_len, output_dim)
-        values = self.value(x)  # (batch_size, seq_len, output_dim)
+# 加载三个数据集
+gathered = np.load(f"{data_dir}/gathered.npy")  # 形状 (n,28,6,4)
+latency = np.load(f"{data_dir}/latency.npy")    # 形状 (n,5)
+replicas = np.load(f"{data_dir}/replicas.npy")  # 形状 (28,)
 
-        # Calculate attention scores
-        attention_scores = torch.matmul(queries, keys.transpose(-2, -1)) / (
-                keys.shape[-1] ** 0.5)  # (batch_size, seq_len, seq_len)
-        attention_weights = self.softmax(attention_scores)  # (batch_size, seq_len, seq_len)
+# ----------------------------------
+# 步骤2：数据完整性验证
+# ----------------------------------
+# 检查样本数量一致性
+assert gathered.shape[0] == latency.shape[0], \
+    f"时间步数量不一致: gathered {gathered.shape[0]} vs latency {latency.shape[0]}"
 
-        # Apply attention weights
-        output = torch.matmul(attention_weights, values)  # (batch_size, seq_len, output_dim)
-        return output
+# 检查服务数量一致性
+assert gathered.shape[1] == replicas.shape[0] == 28, \
+    f"服务数量不一致: gathered {gathered.shape[1]}, replicas {replicas.shape[0]}"
 
+n_timesteps = gathered.shape[0]
+print(f"数据加载成功！总时间步: {n_timesteps}")
 
-# Define the neural network model with self-attention
-class AttentionMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, attention_dim):
-        super(AttentionMLP, self).__init__()
-        self.input_dim = input_dim
-        self.attention = SelfAttention(input_dim, attention_dim)
-        self.fc1 = nn.Linear(attention_dim, hidden_dim)  # Correct the input size
-        self.fc2 = nn.Linear(hidden_dim, 64)
-        self.fc3 = nn.Linear(64, 2)  # Output size = 2 (binary classification)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
-
-    def forward(self, x):
-        # Reshape input for attention: (batch_size, seq_len, input_dim)
-        batch_size, feature_dim = x.size()
-        seq_len = 1  # Since features are flattened into a sequence
-        x = x.view(batch_size, seq_len, feature_dim)
-
-        # Apply self-attention
-        attention_out = self.attention(x)  # (batch_size, seq_len, attention_dim)
-
-        # Flatten attention output
-        flattened = attention_out.view(batch_size, -1)
-
-        # Pass through fully connected layers
-        x = self.relu(self.fc1(flattened))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+# ----------------------------------
+# 步骤3：特征工程处理
+# ----------------------------------
+def process_gathered(gathered, replicas):
+    """处理第一类数据：融合副本数量（不标准化）并对统计量标准化"""
+    n_timesteps = gathered.shape[0]
+    
+    # 展平最后两个维度 (n,28,6,4) → (n,28,24)
+    flattened = gathered.reshape(n_timesteps, 28, -1)
+    
+    # 直接广播原始副本数（不标准化）到所有时间步：(28,) → (n,28,1)
+    replicas_expanded = np.tile(
+        replicas.reshape(1, -1, 1),  # 先变形为 (1,28,1)
+        (n_timesteps, 1, 1)          # 沿时间步复制n次 → (n,28,1)
+    ).astype(np.float32)  # 统一数据类型
+    
+    # 拼接特征 → (n,28,25)
+    merged = np.concatenate([flattened, replicas_expanded], axis=-1)
+    
+    # 仅对前24列（统计量）进行服务级标准化
+    service_scalers = []
+    for i in range(28):
+        scaler = StandardScaler()
+        # 只标准化前24列，保留副本数原始值
+        merged[:, i, :24] = scaler.fit_transform(merged[:, i, :24])
+        service_scalers.append(scaler)
+    
+    return merged, service_scalers
 
 
-# Initialize the model, loss function, and optimizer
-input_dim = X_train.shape[1]
-hidden_dim = 128
-attention_dim = 64
-model = AttentionMLP(input_dim, hidden_dim, attention_dim).to(device)
+def process_data(window_size=10, pred_window=5, threshold=500):
+    """
+    处理时序数据生成带滑动窗口的训练数据集
+    
+    参数:
+    window_size (int): 输入模型的历史时间步数，默认用过去10个时间步预测未来
+    pred_window (int): 预测未来多少个时间步的违例状态，默认预测未来5个时间步
+    threshold (int): SLO违例阈值(单位:ms)，默认500ms，超过则标记为违例
+    
+    返回:
+    tuple: (
+        (训练集服务数据, 训练集延迟数据, 训练标签),
+        (验证集服务数据, 验证集延迟数据, 验证标签),
+        (测试集服务数据, 测试集延迟数据, 测试标签),
+        service_scalers,  # 服务数据标准化器列表(每个服务一个)
+        latency_scaler   # 延迟数据标准化器
+    )
+    
+    处理流程:
+    1. 服务数据预处理: 融合副本数量并标准化统计量
+    2. 延迟数据预处理: 标准化延迟指标(除P99外)
+    3. 滑动窗口生成: 用window_size步历史数据预测未来pred_window步的违例状态
+    4. 时序数据划分: 按70-15-15比例分割训练/验证/测试集，保持时间连续性
+    5. 标签生成: 计算预测窗口内P99延迟的平均值，超过阈值标记为违例(1)
+    """
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # 处理第一类数据
+    X_service, service_scalers = process_gathered(gathered, replicas)
+    
+    # 处理第二类数据：保留原始延迟数据用于标签生成
+    raw_latency = latency.copy()  # 原始未标准化的延迟数据
+    percentile_idx = 3  # 假设'99%'延迟在latency数据的第3列
+    
+    # 标准化延迟指标（仅用于模型输入）
+    latency_scaler = StandardScaler()
+    X_latency = latency_scaler.fit_transform(latency)
+
+    # ----------------------------------
+    # 生成滑动窗口数据集
+    # ----------------------------------
+    def create_dataset(X_serv, X_lat, raw_lat, start_idx, end_idx):
+        samples_serv = []
+        samples_lat = []
+        labels = []
+        
+        # 计算有效范围（考虑预测窗口）
+        effective_end = end_idx - pred_window
+        
+        for i in range(start_idx, effective_end + 1):
+            # 输入窗口：t-window_size 到 t-1
+            window_start = max(i - window_size, 0)
+            window_end = i
+            
+            # 服务数据窗口（三维时序数据）
+            serv_window = X_serv[window_start:window_end]  # (seq_len, 28, 25)
+            
+            # 延迟数据窗口（二维时序数据）
+            lat_window = X_lat[window_start:window_end]     # (seq_len, 5)
+            
+            # 如果窗口不足长度，进行padding（前向填充）
+            if serv_window.shape[0] < window_size:
+                pad_size = window_size - serv_window.shape[0]
+                serv_window = np.pad(serv_window, 
+                                   ((pad_size,0), (0,0), (0,0)),
+                                   mode='edge')
+                lat_window = np.pad(lat_window,
+                                  ((pad_size,0), (0,0)),
+                                  mode='edge')
+            
+            # 预测窗口：t 到 t+pred_window-1
+            pred_values = raw_lat[i:i+pred_window, percentile_idx]
+            
+            # 生成标签：平均P99延迟是否超过阈值
+            avg_p99 = np.mean(pred_values)
+            label = 1 if avg_p99 > threshold else 0
+            
+            samples_serv.append(serv_window)
+            samples_lat.append(lat_window)
+            labels.append(label)
+        
+        return (
+            np.array(samples_serv),
+            np.array(samples_lat),
+            np.array(labels)
+        )
+
+    # ----------------------------------
+    # 保持时序的数据划分
+    # ----------------------------------
+    n_timesteps = X_service.shape[0]
+    
+    # 计算划分点（保持原始比例）
+    split_idx = int(n_timesteps * 0.7)
+    val_idx = int(n_timesteps * 0.85)
+    
+    # 训练集（前70%）
+    X_train_serv, X_train_lat, y_train = create_dataset(
+        X_service, X_latency, raw_latency, 0, split_idx
+    )
+    
+    # 验证集（中间15%）
+    X_val_serv, X_val_lat, y_val = create_dataset(
+        X_service, X_latency, raw_latency, split_idx, val_idx
+    )
+    
+    # 测试集（后15%）
+    X_test_serv, X_test_lat, y_test = create_dataset(
+        X_service, X_latency, raw_latency, val_idx, n_timesteps
+    )
+
+    # ----------------------------------
+    # 输出数据集信息
+    # ----------------------------------
+    def print_dataset_info(name, serv, lat, labels):
+        print(f"\n{name}数据集:")
+        print(f"服务数据形状: {serv.shape} (样本数, 时间步, 服务数, 特征数)")
+        print(f"延迟数据形状: {lat.shape} (样本数, 时间步, 特征数)")
+        print(f"标签分布: 0={np.sum(labels==0)}, 1={np.sum(labels==1)}")
+    
+    print_dataset_info("训练集", X_train_serv, X_train_lat, y_train)
+    print_dataset_info("验证集", X_val_serv, X_val_lat, y_val)
+    print_dataset_info("测试集", X_test_serv, X_test_lat, y_test)
+
+    return (
+        (X_train_serv, X_train_lat, y_train),
+        (X_val_serv, X_val_lat, y_val),
+        (X_test_serv, X_test_lat, y_test),
+        service_scalers,
+        latency_scaler
+    )
+
+# 使用示例
+train_data, val_data, test_data, service_scalers, latency_scaler = process_data()
 
 
-# Training the model
-def train_model(model, train_loader, criterion, optimizer, epochs=20):
-    model.train()
-    for epoch in range(epochs):
-        total_loss = 0
-        for batch in train_loader:
-            X_batch, y_batch = batch
-            optimizer.zero_grad()
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(train_loader):.4f}")
 
-
-# Evaluating the model
-def evaluate_model(model, test_loader):
-    model.eval()
-    y_true = []
-    y_pred = []
-    with torch.no_grad():
-        for batch in test_loader:
-            X_batch, y_batch = batch
-            outputs = model(X_batch)
-            _, preds = torch.max(outputs, 1)
-            y_true.extend(y_batch.cpu().numpy())
-            y_pred.extend(preds.cpu().numpy())
-    return y_true, y_pred
+def main():
+    pass
 
 
 if __name__ == "__main__":
-    # Train the model
-    train_model(model, train_loader, criterion, optimizer, epochs=200)
-
-    # 在训练完成后保存模型权重
-    torch.save(model.state_dict(), "attention_mlp_weights.pth")
-    print("Model weights saved to attention_mlp_weights.pth")
-
-    # 导出模型为 ONNX 格式
-    dummy_input = torch.randn(1, X_train.shape[1], device=device)  # 创建一个示例输入张量
-    print(dummy_input.shape)
-    onnx_filename = "attention_mlp.onnx"
-
-    torch.onnx.export(
-        model,  # 模型
-        dummy_input,  # 示例输入
-        onnx_filename,  # 保存的 ONNX 文件名
-        input_names=["input"],  # 输入节点名称
-        output_names=["output"],  # 输出节点名称
-        dynamic_axes={  # 动态维度支持
-            "input": {0: "batch_size"},  # 输入的 batch_size 为动态
-            "output": {0: "batch_size"}  # 输出的 batch_size 为动态
-        },
-        opset_version=11  # ONNX opset 版本
-    )
-    print(f"Model exported to ONNX format as {onnx_filename}")
-
-    # Evaluate the model
-    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-
-    y_true, y_pred = evaluate_model(model, test_loader)
-
-    # Print evaluation metrics
-    print(f"Accuracy: {accuracy_score(y_true, y_pred):.2f}")
-    print("\nClassification Report:")
-    print(classification_report(y_true, y_pred))
-
-    # Plot confusion matrix
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Class 0', 'Class 1'],
-                yticklabels=['Class 0', 'Class 1'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Confusion Matrix')
-    plt.show()
+    main()
