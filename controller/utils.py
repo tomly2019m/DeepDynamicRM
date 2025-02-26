@@ -1,3 +1,5 @@
+from typing import Tuple
+import numpy as np
 import torch.nn.functional as F
 import torch.nn as nn
 import argparse
@@ -88,99 +90,95 @@ class Policy_Net(nn.Module):
         return probs
 
 
-class ReplayBuffer(object):
-    def __init__(self, device, gpu_size, mem_size, max_size=int(1e5)):
-        self.dvc = device
-        self.max_size = max_size
+class ReplayBuffer:
+    """经验回放池"""
+    def __init__(self, 
+                 buffer_size: int = 100000, 
+                 num_services: int = 28,
+                 state_window: int = 10,
+                 state_features: int = 25,
+                 num_actions: int = 5):
+        """
+        参数:
+            buffer_size: 缓冲池最大容量
+            num_services: 固定服务数量 (必须为28)
+            state_window: 状态时间窗口 (固定为10步)
+            state_features: 每个服务的特征维度 (固定为25)
+            num_actions: 全局有限动作的数量 (例如5种策略)
+        """
+        assert num_services == 28, "仅支持28个服务的配置"
+        
+        # 预分配内存 (优化内存访问模式)
+        self.states = np.zeros((buffer_size, state_window, num_services, state_features),
+                              dtype=np.float32)  # 状态序列
+        self.actions = np.zeros(buffer_size, dtype=np.int64)         # 动作索引 (0~num_actions-1)
+        self.rewards = np.zeros(buffer_size, dtype=np.float32)        # 即时奖励
+        self.next_states = np.zeros_like(self.states)                # 下一状态
+        self.dones = np.zeros(buffer_size, dtype=np.bool_)           # 终止标志
+        
+        # 指针管理
+        self.buffer_size = buffer_size
+        self.current_idx = 0    # 当前写入位置
+        self.current_size = 0   # 当前有效数据量
 
-        self.size = 0
-        self.ptr = 0
+    def add_experience(self,
+                      state: np.ndarray,       # (10,28,25)
+                      action: int,            # 动作索引 (标量)
+                      reward: float,
+                      next_state: np.ndarray, # (10,28,25)
+                      done: bool) -> None:
+        """添加单条经验"""
+        # 输入数据验证
+        self._validate_shape(state, (10,28,25), "State")
+        self._validate_scalar(action, "Action")
+        self._validate_shape(next_state, (10,28,25), "Next State")
+        
+        # 写入存储
+        idx = self.current_idx
+        self.states[idx] = state
+        self.actions[idx] = action
+        self.rewards[idx] = reward
+        self.next_states[idx] = next_state
+        self.dones[idx] = done
+        
+        # 更新环形缓冲指针
+        self.current_idx = (idx + 1) % self.buffer_size
+        self.current_size = min(self.current_size + 1, self.buffer_size)
 
-        self.gpu_size = gpu_size
-        self.mem_size = mem_size
+    def sample_batch(self, 
+                    batch_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """采样训练批次"""
+        indices = np.random.choice(self.current_size, batch_size, replace=False)
+        
+        return (
+            torch.FloatTensor(self.states[indices]),        # (B,10,28,25)
+            torch.LongTensor(self.actions[indices]),        # (B,)
+            torch.FloatTensor(self.rewards[indices]).unsqueeze(1),  # (B,1)
+            torch.FloatTensor(self.next_states[indices]),   # (B,10,28,25)
+            torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1)  # (B,1)
+        )
 
-        # self.state = torch.zeros((max_size, 4, 84, 84), dtype=torch.uint8, device=self.dvc)
-        # self.action = torch.zeros((max_size, 1), dtype=torch.int64, device=self.dvc)
-        # self.reward = torch.zeros((max_size, 1), device=self.dvc)
-        # self.next_state = torch.zeros((max_size, 4, 84, 84), dtype=torch.uint8, device=self.dvc)
-        # self.dw = torch.zeros((max_size, 1), dtype=torch.bool, device=self.dvc)
+    def _validate_shape(self, data: np.ndarray, expected_shape: tuple, name: str):
+        """验证状态数据维度"""
+        if data.shape != expected_shape:
+            raise ValueError(f"Invalid {name} shape. Expected: {expected_shape}, Got: {data.shape}")
 
-        # 显存中的数据
-        self.s_gpu = torch.zeros((self.gpu_size, 4, 84, 84), dtype=torch.uint8, device=self.dvc)
-        self.a_gpu = torch.zeros((self.gpu_size, 1), dtype=torch.int64, device=self.dvc)
-        self.r_gpu = torch.zeros((self.gpu_size, 1), device=self.dvc)
-        self.s_next_gpu = torch.zeros((self.gpu_size, 4, 84, 84), dtype=torch.uint8, device=self.dvc)
-        self.dw_gpu = torch.zeros((self.gpu_size, 1), dtype=torch.bool, device=self.dvc)
+    def _validate_scalar(self, value: int, name: str):
+        """验证动作是否为标量"""
+        if not isinstance(value, (int, np.integer)):
+            raise TypeError(f"{name} must be integer scalar. Got type: {type(value)}")
+        if not (0 <= value < self.num_actions):
+            raise ValueError(f"{name} index out of range. Max allowed: {self.num_actions-1}")
 
-        # 内存中的数据
-        self.s_cpu = torch.zeros((self.mem_size, 4, 84, 84), dtype=torch.uint8)
-        self.a_cpu = torch.zeros((self.mem_size, 1), dtype=torch.int64)
-        self.r_cpu = torch.zeros((self.mem_size, 1))
-        self.s_next_cpu = torch.zeros((self.mem_size, 4, 84, 84), dtype=torch.uint8)
-        self.dw_cpu = torch.zeros((self.mem_size, 1), dtype=torch.bool)
+    @property
+    def num_actions(self) -> int:
+        """返回动作空间维度"""
+        return self.actions.max() + 1 if self.current_size > 0 else 0
 
-    def add(self, s, a, r, s_next, dw):
-        """将新的经验添加到回放池中"""
-        if self.size < self.gpu_size:
-            # 向显存添加数据
-            self.s_gpu[self.ptr] = s
-            self.a_gpu[self.ptr] = a
-            self.r_gpu[self.ptr] = r
-            self.s_next_gpu[self.ptr] = s_next
-            self.dw_gpu[self.ptr] = dw
-        else:
-            # 向内存添加数据
-            index_mem = self.ptr - self.gpu_size
-            if index_mem < self.mem_size:
-                self.s_cpu[index_mem] = s
-                self.a_cpu[index_mem] = a
-                self.r_cpu[index_mem] = r
-                self.s_next_cpu[index_mem] = s_next
-                self.dw_cpu[index_mem] = dw
-            else:
-                print("Warning: Replay buffer has overflowed. New experiences will not be added.")
-
-        # 更新指针和大小
-        self.ptr = (self.ptr + 1) % self.max_size
-        self.size = min(self.size + 1, self.max_size)
-
-    def sample(self, batch_size):
-        # ind = np.random.choice((self.size-1), batch_size, replace=False)  # Time consuming, but no duplication
-        # ind = np.random.randint(0, (self.size - 1), batch_size)  # Time effcient, might duplicates
-
-        ind = torch.randint(0, self.size, size=(batch_size,), device=self.dvc)
-
-        # 初始化存储结果的空张量
-        s_batch = torch.zeros((batch_size, 4, 84, 84), dtype=torch.float32, device=self.dvc)
-        a_batch = torch.zeros((batch_size, 1), dtype=torch.int64, device=self.dvc)
-        r_batch = torch.zeros((batch_size, 1), device=self.dvc)
-        s_next_batch = torch.zeros((batch_size, 4, 84, 84), dtype=torch.float32, device=self.dvc)
-        dw_batch = torch.zeros((batch_size, 1), dtype=torch.bool, device=self.dvc)
-
-        # 逐个检查每个索引并从显存/内存中提取数据
-        for i in range(batch_size):
-            idx = ind[i].item()
-
-            if idx < self.gpu_size:
-                # 从显存中提取数据
-                s_batch[i] = self.s_gpu[idx]
-                s_next_batch[i] = self.s_next_gpu[idx]
-                a_batch[i] = self.a_gpu[idx]
-                r_batch[i] = self.r_gpu[idx]
-                dw_batch[i] = self.dw_gpu[idx]
-            else:
-                # 从内存中提取数据
-                idx_mem = idx - self.gpu_size
-                s_batch[i] = self.s_cpu[idx_mem]
-                s_next_batch[i] = self.s_next_cpu[idx_mem]
-                a_batch[i] = self.a_cpu[idx_mem]
-                r_batch[i] = self.r_cpu[idx_mem]
-                dw_batch[i] = self.dw_cpu[idx_mem]
-
-        return s_batch, a_batch, r_batch, s_next_batch, dw_batch
-
-        # return self.state[ind].to(self.dvc), self.action[ind].to(self.dvc), self.reward[ind].to(self.dvc), \
-        #     self.next_state[ind].to(self.dvc), self.dw[ind].to(self.dvc)
+    @property
+    def is_full(self) -> bool:
+        """缓冲池是否已满"""
+        return self.current_size >= self.buffer_size
 
 
 def evaluate_policy(env, agent, seed, turns=3):
