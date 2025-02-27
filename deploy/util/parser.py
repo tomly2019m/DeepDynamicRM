@@ -1,5 +1,6 @@
 import re
 
+
 # 解析命令行的输出 得到加入docker集群的命令
 def parse_swarm_output(output):
     """
@@ -13,14 +14,17 @@ def parse_swarm_output(output):
     worker_command_pattern = r"docker swarm join --token\s+([^\n]+)"
     worker_command_match = re.search(worker_command_pattern, output)
     if worker_command_match:
-        result['worker_command'] = f"docker swarm join --token {worker_command_match.group(1)}"
+        result[
+            'worker_command'] = f"docker swarm join --token {worker_command_match.group(1)}"
 
     # 使用正则表达式提取 manager 加入命令的提示
     manager_command_pattern = r"docker swarm join-token manager"
     if manager_command_pattern in output:
-        result['manager_command_hint'] = "Run 'docker swarm join-token manager' and follow the instructions."
+        result[
+            'manager_command_hint'] = "Run 'docker swarm join-token manager' and follow the instructions."
 
     return result
+
 
 # 解析docker ps 的输出，得到服务名
 # 输入样例：socialnetwork_media-service.1.pfjrt565lfwu1m0qvljq9fq9i
@@ -45,7 +49,7 @@ def parse_node_label(output: str) -> dict:
         label_content = label_map.strip()
         if label_content.startswith("map[") and label_content.endswith("]"):
             label_content = label_content[4:-1]  # 移除 "map[" 和 "]"
-            
+
         # 将标签部分解析为字典
         labels = {}
         if label_content:
@@ -55,7 +59,7 @@ def parse_node_label(output: str) -> dict:
                 if ":" in pair:
                     key, value = pair.split(":", 1)
                     labels[key.strip()] = value.strip()
-                    
+
         # 将解析结果存储到字典中
         parsed_labels[node] = labels
 
@@ -75,12 +79,14 @@ def test_parse_sawrm_output():
     result = parse_swarm_output(swarm_output)
     print(result)
 
+
 def test_parse_node_label():
     node_label_output = """debian1: map[type:compute]
     debian2: map[type:compute]
     ubuntu2: map[type:data]"""
     result = parse_node_label(node_label_output)
     print(result)
+
 
 if __name__ == "__main__":
     # test_parse_sawrm_output()

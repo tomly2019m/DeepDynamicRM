@@ -15,16 +15,16 @@ from deploy.util.parser import parse_service_name
 running_container_list = []
 
 # 服务名 -> 容器名列表
-service_container : dict[str, list[str]] = {}
+service_container: dict[str, list[str]] = {}
 
 # 服务名列表
 services: list[str] = []
 
 # 容器名 -> 容器id
-container_name_id : dict[str, str] = {}
+container_name_id: dict[str, str] = {}
 
 # 容器id -> 容器pid
-container_id_pid : dict[str, str] = {}
+container_id_pid: dict[str, str] = {}
 
 # 容器cpu_time 用于保存每个容器总的cpu时间，从而计算在一段时间内容器占用的CPU时间
 container_id_total_cpu: dict[str, float] = {}
@@ -36,12 +36,16 @@ container_id_total_io: dict[str, tuple[int, int]] = {}
 container_id_total_network: dict[str, tuple[int, int]] = {}
 
 # 数据采集指标列表
-metrics = ["cpu_usage", "memory_usage", "io_write", "io_read", "network_recv", "network_send"]
+metrics = [
+    "cpu_usage", "memory_usage", "io_write", "io_read", "network_recv",
+    "network_send"
+]
 
 # 数据采集间隔 单位：秒
 collect_interval = 1
 
 benchmark_name = "socialnetwork"
+
 
 def load_services():
     global services, service_container, container_name_id, container_id_pid
@@ -56,6 +60,7 @@ def load_services():
         container_name_id = {}
         # 初始化container_id_pid
         container_id_pid = {}
+
 
 # 获取当前节点正在运行的容器列表
 def set_running_container_list():
@@ -77,6 +82,7 @@ def set_running_container_list():
             if service_name in services:
                 service_container[service_name].append(container_name)
 
+
 # 依据容器名获取容器id
 def get_container_id(container_name: str) -> str:
     command = f"docker inspect -f '{{{{.Id}}}}' {container_name}"
@@ -84,6 +90,7 @@ def get_container_id(container_name: str) -> str:
     if err:
         raise RuntimeError(f"获取容器id失败: {err}")
     return result.strip()
+
 
 # 获取容器id
 def set_container_name_id():
@@ -93,6 +100,7 @@ def set_container_name_id():
             container_id = get_container_id(container_name)
             container_name_id[container_name] = container_id
 
+
 # 依据容器id获取容器pid
 def get_container_pid(container_id: str) -> str:
     command = f"docker inspect -f '{{{{.State.Pid}}}}' {container_id}"
@@ -100,6 +108,7 @@ def get_container_pid(container_id: str) -> str:
     if err:
         raise RuntimeError(f"获取容器pid失败: {err}")
     return result.strip()
+
 
 # 配置容器pid
 def set_container_pids():
@@ -110,10 +119,12 @@ def set_container_pids():
             container_pid = get_container_pid(container_id)
             container_id_pid[container_id] = container_pid
 
+
 # 获取cgroup版本
 def get_cgroup_version():
     cgroup_type = os.popen("stat -fc %T /sys/fs/cgroup").read().strip()
     return "v2" if cgroup_type == "cgroup2fs" else "v1"
+
 
 # 获取容器cpu使用率
 def get_container_cpu_usage():
@@ -121,7 +132,7 @@ def get_container_cpu_usage():
     cgroup_version = get_cgroup_version()
 
     # 服务名 -> 服务cpu使用率列表（对应于所有replicas）
-    service_cpu_time : dict[str, list[float]] = {}
+    service_cpu_time: dict[str, list[float]] = {}
     # 一个服务可能包含多个容器，需要遍历所有容器
     for service_name, container_list in service_container.items():
         service_cpu_time[service_name] = []
@@ -135,7 +146,8 @@ def get_container_cpu_usage():
                     line = f.readline()
                     # 在V2版本中，CPU计数的单位是微秒
                     cum_cpu_time = int(line.split(' ')[1])
-                    previous_cpu_time = container_id_total_cpu.get(container_id, 0)
+                    previous_cpu_time = container_id_total_cpu.get(
+                        container_id, 0)
                     cpu_usage_time = max(cum_cpu_time - previous_cpu_time, 0)
                     container_id_total_cpu[container_id] = cum_cpu_time
                     service_cpu_time[service_name].append(cpu_usage_time)
@@ -147,7 +159,7 @@ def get_memory_usage():
     global service_container, container_name_id
 
     # 服务名 -> 服务内存使用率列表（对应于所有replicas）
-    service_memory_usage : dict[str, list[float]] = {}
+    service_memory_usage: dict[str, list[float]] = {}
 
     cgroup_version = get_cgroup_version()
     for service, container_list in service_container.items():
@@ -166,7 +178,7 @@ def get_memory_usage():
                         if key in ["anon", "file", "kernel"]:
                             total_memory += value
                 # 单位转换为MB
-                service_memory_usage[service].append(total_memory / 1024.0 ** 2)
+                service_memory_usage[service].append(total_memory / 1024.0**2)
     return service_memory_usage
 
 
@@ -175,7 +187,7 @@ def get_io_usage():
     global service_container, container_name_id
 
     # 服务名 -> 服务io使用率列表（对应于所有replicas）
-    service_io_usage : dict[str, list[tuple[int, int]]] = {}
+    service_io_usage: dict[str, list[tuple[int, int]]] = {}
 
     cgroup_version = get_cgroup_version()
     for service, container_list in service_container.items():
@@ -194,7 +206,10 @@ def get_io_usage():
                     parts = line.strip().split()
                     if len(parts) < 2:
                         continue  # Skip invalid lines
-                    stats = {k.split('=')[0]: int(k.split('=')[1]) for k in parts[1:]}  # Parse key-value pairs
+                    stats = {
+                        k.split('=')[0]: int(k.split('=')[1])
+                        for k in parts[1:]
+                    }  # Parse key-value pairs
 
                     # Accumulate values across all devices
                     total_rbytes += stats.get('rbytes', 0)
@@ -203,9 +218,13 @@ def get_io_usage():
                     total_wios += stats.get('wios', 0)
             total_bytes = total_rbytes + total_wbytes
             total_operations = total_rios + total_wios
-            service_io_usage[service].append((total_bytes - container_id_total_io.get(container_id, (0, 0))[0], 
-                                              total_operations - container_id_total_io.get(container_id, (0, 0))[1]))
-            container_id_total_io[container_id] = (total_bytes, total_operations)
+            service_io_usage[service].append(
+                (total_bytes - container_id_total_io.get(container_id,
+                                                         (0, 0))[0],
+                 total_operations -
+                 container_id_total_io.get(container_id, (0, 0))[1]))
+            container_id_total_io[container_id] = (total_bytes,
+                                                   total_operations)
     return service_io_usage
 
 
@@ -214,14 +233,14 @@ def get_network_usage():
     global service_container, container_name_id, container_id_pid
 
     # 服务名 -> 服务网络使用率列表（对应于所有replicas）tuple[int, int] 分别表示网络接收量和网络发送量
-    service_network_usage : dict[str, list[tuple[int, int]]] = {}
+    service_network_usage: dict[str, list[tuple[int, int]]] = {}
 
     for service, container_list in service_container.items():
         service_network_usage[service] = []
         for container_name in container_list:
 
             recv_bytes, send_bytes = 0, 0
-            
+
             container_id = container_name_id[container_name]
             container_pid = container_id_pid[container_id]
             pseudo_file = f"/proc/{container_pid}/net/dev"
@@ -235,12 +254,19 @@ def get_network_usage():
                     if 'Inter-|   Receive' in line or 'face |bytes    packets errs' in line:
                         continue
                     data = line.strip().split()
-                    data = [d for d in data if (d != '' and '#' not in d and ":" not in d)]
+                    data = [
+                        d for d in data
+                        if (d != '' and '#' not in d and ":" not in d)
+                    ]
                     recv_bytes += int(data[0])
                     send_bytes += int(data[8])
-                last_recv_bytes, last_send_bytes = container_id_total_network.get(container_id, (0, 0))
-                service_network_usage[service].append((recv_bytes - last_recv_bytes, send_bytes - last_send_bytes))
-                container_id_total_network[container_id] = (recv_bytes, send_bytes)
+                last_recv_bytes, last_send_bytes = container_id_total_network.get(
+                    container_id, (0, 0))
+                service_network_usage[service].append(
+                    (recv_bytes - last_recv_bytes,
+                     send_bytes - last_send_bytes))
+                container_id_total_network[container_id] = (recv_bytes,
+                                                            send_bytes)
     return service_network_usage
 
 
@@ -252,11 +278,13 @@ def get_replicas():
         replicas[service] = len(container_list)
     return replicas
 
+
 # 计算一个列表中的最大值
 def calculate_max(data: list | list[list], position: int = 0):
     if isinstance(data[0], list):
         return max(data, key=lambda x: x[position])[position]
     return max(data)
+
 
 # 计算一个列表中的最小值
 def calculate_min(data: list | list[list], position: int = 0):
@@ -264,17 +292,23 @@ def calculate_min(data: list | list[list], position: int = 0):
         return min(data, key=lambda x: x[position])[position]
     return min(data)
 
+
 # 计算一个列表中的平均值
 def calculate_mean(data: list | list[list], position: int = 0):
     if isinstance(data[0], list):
         return sum(x[position] for x in data) / len(data)
     return sum(data) / len(data)
 
+
 # 计算一个列表中的标准差
 def calculate_std(data: list | list[list], position: int = 0):
     if isinstance(data[0], list):
-        return math.sqrt(sum((x[position] - calculate_mean(data, position)) ** 2 for x in data) / len(data))
-    return math.sqrt(sum((x - calculate_mean(data, position)) ** 2 for x in data) / len(data))
+        return math.sqrt(
+            sum((x[position] - calculate_mean(data, position))**2
+                for x in data) / len(data))
+    return math.sqrt(
+        sum((x - calculate_mean(data, position))**2 for x in data) / len(data))
+
 
 # 将不同节点上的数据合并
 def concat_data(data1: dict, data2: dict):
@@ -282,8 +316,10 @@ def concat_data(data1: dict, data2: dict):
         data1.setdefault(k, []).extend(v)
     return data1
 
+
 # 汇聚不同节点上的replicas数据 相同服务，数据相加
-def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str, list[int]]):
+def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str,
+                                                                  list[int]]):
     for k, v in data2.items():
         if k in data1:
             data1[k] = data1[k] + data2[k]
@@ -291,30 +327,47 @@ def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str, list[int]
             data1[k] = data2[k]
     return data1
 
+
 # 处理数据，计算每个服务的最大值、最小值、平均值、标准差
 def process_data(data: dict):
     for k, v in data.items():
         if isinstance(v[0], list):
-            data[k] = [calculate_max(v, 0), calculate_min(v, 0), calculate_mean(v, 0), calculate_std(v, 0)]
-            data[k].extend([calculate_max(v, 1), calculate_min(v, 1), calculate_mean(v, 1), calculate_std(v, 1)])
+            data[k] = [
+                calculate_max(v, 0),
+                calculate_min(v, 0),
+                calculate_mean(v, 0),
+                calculate_std(v, 0)
+            ]
+            data[k].extend([
+                calculate_max(v, 1),
+                calculate_min(v, 1),
+                calculate_mean(v, 1),
+                calculate_std(v, 1)
+            ])
         else:
-            data[k] = [calculate_max(v), calculate_min(v), calculate_mean(v), calculate_std(v)]
+            data[k] = [
+                calculate_max(v),
+                calculate_min(v),
+                calculate_mean(v),
+                calculate_std(v)
+            ]
     return data
 
+
 # 将处理好的dict转换为numpy数组 shape = (service_num, metric_num, [max, min, mean, std] -> 4)
-# dict的key为服务名，value为列表[max1, min1, mean1, std1, max2, min2, mean2, std2, ...] 
+# dict的key为服务名，value为列表[max1, min1, mean1, std1, max2, min2, mean2, std2, ...]
 # 每4个为一组，分别表示指标[cpu_usage, memory_usage, io_write, io_read, network_recv, network_send]的max, min, mean, std
 def to_numpy(data: dict):
     service_num = len(data)
     metric_num = len(metrics)
-    numpy_data = np.zeros((service_num, metric_num, 4))  
-    
+    numpy_data = np.zeros((service_num, metric_num, 4))
+
     for i, service_name in enumerate(data):
-        service_data = data[service_name] 
-        
+        service_data = data[service_name]
+
         for j in range(metric_num):
             # 每个指标的 4 个数值分别为 max, min, mean, std
-            numpy_data[i, j] = service_data[j*4:(j+1)*4]
+            numpy_data[i, j] = service_data[j * 4:(j + 1) * 4]
 
     return numpy_data
 
@@ -325,40 +378,43 @@ def transform_data(gathered_data):
         ('cpu_usage', ('cpu', 4)),
         ('memory_usage', ('memory', 4)),
         ('io_write', ('io', 0)),  # io前4个元素
-        ('io_read', ('io', 4)),    # io后4个元素
+        ('io_read', ('io', 4)),  # io后4个元素
         ('network_recv', ('network', 0)),  # network前4个
-        ('network_send', ('network', 4))   # network后4个
+        ('network_send', ('network', 4))  # network后4个
     ])
-    
+
     # 获取所有服务并保持顺序一致
     all_services = list(gathered_data['cpu'].keys())
-    
+
     # 初始化结果数组 (service_num, metric_num, 4)
     service_num = len(all_services)
     metric_num = len(metric_mapping)
     result_array = np.zeros((service_num, metric_num, 4), dtype=np.float64)
-    
+
     # 填充数据
     for service_idx, service_name in enumerate(all_services):
-        for metric_idx, (metric_name, (src_key, offset)) in enumerate(metric_mapping.items()):
+        for metric_idx, (metric_name,
+                         (src_key,
+                          offset)) in enumerate(metric_mapping.items()):
             try:
                 src_data = gathered_data[src_key][service_name]
-                
+
                 # 处理不同长度的数据
                 if len(src_data) == 8:  # IO和Network数据
-                    metric_data = src_data[offset:offset+4]
+                    metric_data = src_data[offset:offset + 4]
                 elif len(src_data) == 4:  # CPU和Memory数据
                     metric_data = src_data
                 else:
                     raise ValueError(f"非预期数据长度: {len(src_data)}")
-                
+
                 result_array[service_idx, metric_idx] = metric_data
-                
+
             except KeyError as e:
                 print(f"警告: 服务 {service_name} 缺少指标 {src_key}")
                 result_array[service_idx, metric_idx] = np.nan
-    
+
     return result_array
+
 
 # 初始化数据采集器
 def init_collector():
@@ -389,19 +445,27 @@ def init_collector():
 
 
 # 配置cpu限制 输入参数是一个字典，key是service name，value是该service中每个replicas的cpu限制
-def set_cpu_limit(cpu_limit : dict[str, int]):
+def set_cpu_limit(cpu_limit: dict[str, int]):
     global service_container
     for service, limit in cpu_limit.items():
         for container_name in service_container[service]:
             command = f"docker update --cpu-quota {limit} {container_name}"
             execute_command(command)
 
+
 def test_to_numpy():
     data = {
-        "serviceA": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
-        "serviceB": [26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        "serviceA": [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+            20, 21, 22, 23, 24, 25, 26
+        ],
+        "serviceB": [
+            26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10,
+            9, 8, 7, 6, 5, 4, 3, 2, 1
+        ]
     }
     print(to_numpy(data).shape)
+
 
 def test_get_network_usage():
     init_collector()
@@ -420,23 +484,28 @@ def test_get_container_cpu_usage():
     print(get_container_cpu_usage())
     print(get_container_cpu_usage())
 
+
 def test_load_services():
     load_services()
     print(services)
     print(len(services))
     print(service_container)
 
+
 def test_set_container_name_id():
     set_container_name_id()
     print(container_name_id)
+
 
 def test_set_running_container_list():
     set_running_container_list()
     print(service_container)
 
+
 def test_set_container_pids():
     set_container_pids()
     print(container_id_pid)
+
 
 def test_get_memory_usage():
     init_collector()

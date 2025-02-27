@@ -18,17 +18,16 @@ port = args.port
 host = '0.0.0.0'  # 监听所有可用接口
 
 
-
 def handle_command(command):
     # 在这里解析并执行命令
     print('Executing command:', command)
-    
+
     response = None
     if command == 'init':
         init_collector()
         print("Collector initialized")
         response = "Collector initialized"
-    
+
     elif command == 'collect':
         latest_data = {
             "cpu": get_container_cpu_usage(),
@@ -38,6 +37,7 @@ def handle_command(command):
         }
         response = json.dumps(latest_data)
     return response
+
 
 def slave_listen(master_host, master_port):
     # 创建 socket 对象
@@ -64,5 +64,6 @@ def slave_listen(master_host, master_port):
                 # 返回结果
                 conn.sendall(result.encode())
 
+
 if __name__ == "__main__":
-    slave_listen(host, port) 
+    slave_listen(host, port)
