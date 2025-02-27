@@ -38,71 +38,63 @@ class DynamicServiceEncoder(nn.Module):
 
 
 class Q_Net(nn.Module):
+    """适应动态服务数量的Q网络"""
 
-    def __init__(self, opt):
-        super(Q_Net, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-        self.fc1 = nn.Linear(64 * 7 * 7, opt.fc_width)
-        self.fc2 = nn.Linear(opt.fc_width, opt.action_dim)
+    def __init__(self, num_actions=5, time_steps=10):
+        super().__init__()
+        # 服务编码器
+        self.encoder = DynamicServiceEncoder()
+        # 动作价值头
+        self.q_head = nn.Sequential(nn.Linear(64, 32), nn.ReLU(),
+                                    nn.Linear(32, num_actions))
 
-    def forward(self, obs):
-        s = obs.float(
-        ) / 255  # convert to f32 and normalize before feeding to network
-        s = self.conv(s)
-        s = torch.relu(self.fc1(s))
-        q = self.fc2(s)
-        return q
+    def forward(self, state):
+        """
+        输入: (B, time_steps, num_services, feat_dim)
+        输出: (B, num_actions)
+        """
+        # 动态编码服务
+        state_feat = self.encoder(state)
+        # 生成Q值
+        return self.q_head(state_feat)
 
 
 class Duel_Q_Net(nn.Module):
+    """支持动态服务输入的Dueling DQN"""
 
     def __init__(self, opt):
         super(Duel_Q_Net, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-        self.fc1 = nn.Linear(64 * 7 * 7, opt.fc_width)
-        self.A = nn.Linear(opt.fc_width, opt.action_dim)
-        self.V = nn.Linear(opt.fc_width, 1)
+        self.encoder = DynamicServiceEncoder(feat_dim=opt.feat_dim)
+        self.fc = nn.Linear(64, opt.fc_width)  # 编码器输出64维
+
+        # Dueling 结构
+        self.A = nn.Linear(opt.fc_width, opt.action_dim)  # Advantage流
+        self.V = nn.Linear(opt.fc_width, 1)  # Value流
 
     def forward(self, obs):
-        s = obs.float(
-        ) / 255  # convert to f32 and normalize before feeding to network
-        s = self.conv(s)
-        s = torch.relu(self.fc1(s))
-        Adv = self.A(s)
-        V = self.V(s)
-        Q = V + (Adv - torch.mean(Adv, dim=-1, keepdim=True)
-                 )  # Q(s,a)=V(s)+A(s,a)-mean(A(s,a))
+        """
+        输入: obs形状 (B, T, S, F)
+        输出: Q值 (B, action_dim)
+        """
+        s = self.encoder(obs)  # [B, 64]
+        s = F.relu(self.fc(s))  # [B, fc_width]
+
+        Adv = self.A(s)  # [B, action_dim]
+        Val = self.V(s)  # [B, 1]
+        Q = Val + (Adv - Adv.mean(dim=1, keepdim=True))
         return Q
 
 
 class Double_Q_Net(nn.Module):
+    """双Q网络结构"""
 
     def __init__(self, opt):
         super(Double_Q_Net, self).__init__()
-
-        self.Q1 = Q_Net(opt)
-        self.Q2 = Q_Net(opt)
+        self.Q1 = Duel_Q_Net(opt)
+        self.Q2 = Duel_Q_Net(opt)
 
     def forward(self, s):
-        q1 = self.Q1(s)
-        q2 = self.Q2(s)
-        return q1, q2
+        return self.Q1(s), self.Q2(s)
 
 
 class Double_Duel_Q_Net(nn.Module):
@@ -120,15 +112,13 @@ class Double_Duel_Q_Net(nn.Module):
 
 
 class Policy_Net(nn.Module):
+    """策略网络 (基于Dueling结构)"""
 
     def __init__(self, opt):
         super(Policy_Net, self).__init__()
-        self.P = Q_Net(opt)
-
-    def forward(self, s):
-        logits = self.P(s)
-        probs = F.softmax(logits, dim=1)
-        return probs
+        self.encoder = DynamicServiceEncoder(feat_dim=opt.feat_dim)
+        self.fc = nn.Linear(64, opt.fc_width)
+        self.head = nn.Linear(opt.fc_width, opt.action_dim)
 
 
 class ReplayBuffer:
@@ -270,19 +260,17 @@ def str2bool(v):
 class LinearSchedule(object):
 
     def __init__(self, schedule_timesteps, final_p, initial_p=1.0):
-        """Linear interpolation between initial_p and final_p over
-        schedule_timesteps. After this many timesteps pass final_p is
-        returned.
+        """在schedule_timesteps时间步内，将initial_p线性插值到final_p。
+        超过此时限后，始终返回final_p。
 
-        Parameters
+        参数
         ----------
         schedule_timesteps: int
-            Number of timesteps for which to linearly anneal initial_p
-            to final_p
+            用于将initial_p线性衰减至final_p的总时间步数
         initial_p: float
-            initial output value
+            初始输出值
         final_p: float
-            final output value
+            最终输出值
         """
         self.schedule_timesteps = schedule_timesteps
         self.final_p = final_p
