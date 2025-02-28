@@ -11,6 +11,7 @@ import numpy as np
 from collections import deque
 import paramiko
 from sklearn.preprocessing import StandardScaler
+import torch
 from monitor.data_collector import concat_data, process_data, transform_data
 from mylocust.util.get_latency_data import get_latest_latency
 
@@ -20,6 +21,7 @@ sys.path.append(PROJECT_ROOT)
 from communication.master import SlaveConnection
 from predictor.slo_predictor import OnlineScaler
 from monitor.data_collector import *
+from predictor.slo_predictor import DynamicSLOPredictor
 
 
 class Env:
@@ -73,11 +75,19 @@ class Env:
         # 当前的cpu状态，从gathered中获取
         self.cpu_state = {}
 
+        # 预测器
+        self.predictor = DynamicSLOPredictor(service_mode="attention")
+        self._load_predictor()
+
         # 奖励参数
         self.w1, self.w2, self.w3, self.s4 = 0, 0, 0, 0
         self.pv = 0  # pv阈值
         self.threshold = 0  # SLO阈值
         self._load_reward_config()
+
+        self.steps = 0  # 统计step
+
+        self.done_steps = 90 * 200
 
     # 加载集群配置文件
     def _load_config(self, path):
@@ -261,8 +271,15 @@ class Env:
         for connection in self.connections.values():
             connection.close()
 
-    # 数据采集接口 获取一个时间步的数据
+    def _load_predictor(self):
+        """加载预测器"""
+        model_path = Path(
+            PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
+        self.predictor.load_state_dict(torch.load(model_path))
+        self.predictor.eval()
+
     async def gather_data(self):
+        """数据采集接口 获取一个时间步的数据"""
         tasks = []
         replicas = []
         gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
@@ -293,7 +310,7 @@ class Env:
         gathered["network"] = process_data(gathered["network"])
         gathered = transform_data(gathered)  # 转化为(service_num, 6, 4)
         status = self.merge_replicas(gathered, replicas)  # (service_num, 25)
-        return status, get_latest_latency()
+        return status, latency
 
     async def warmup(self):
         """预热，倒计时10秒填充buffer"""
@@ -338,26 +355,32 @@ class Env:
         await self._execute_action(action)
 
         # 2. 采集新数据
-        gathered = await self._async_gather()
-        processed = self._process_data(gathered)
+        gathered, latency = await self.gather_data()
+        self.buffer.append(gathered)
+        self.latency_buffer.append(latency)
+        stacked_state, stacked_latency = self.get_state_and_latency()
+        # 添加批次维度
+        state_batch = np.expand_dims(stacked_state,
+                                     axis=0)  # shape (1,10,28,25)
+        latency_batch = np.expand_dims(stacked_latency,
+                                       axis=0)  # shape (1,10,5)
 
-        # 3. 更新状态缓冲区
-        self.state_buffer.append(processed)
-        self.gathered_list.append(processed)
+        # 得到预测概率
+        pv = 0
+        with torch.no_grad():
+            pv = self.predictor(torch.FloatTensor(state_batch),
+                                torch.FloatTensor(latency_batch)).item()
 
-        # 4. 获取延迟并计算奖励
-        latency = get_latest_latency()
-        self.latency_list.append(latency)
+        p99_latency = latency[-2]
+        reward = self._calculate_reward(pv, p99_latency)
 
-        # 5. 生成状态窗口
-        state = self._get_state_window()
-        reward = self._calculate_reward(state, latency)
-
-        # 6. 更新时间
-        self.current_exp_time += 1
-        done = self.current_exp_time >= self.exp_time
-
-        return state, reward, done, {}
+        # 两阶段反馈
+        self.steps += 1
+        done = False
+        if self.steps < self.done_steps:
+            if self.steps % 200 == 0:
+                done = True
+        return stacked_state, reward, done
 
     async def _execute_action(self, action):
         """执行资源分配动作"""

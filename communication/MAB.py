@@ -393,6 +393,8 @@ class UCB_Bandit:
         total_cpu_allocation = 0
         for service in self.allocate_dict:
             total_cpu_allocation += self.allocate_dict[service]
+        
+        latency = latency[-2] # P99延迟
 
         # 获取配置中的最大CPU数
         max_cpu = self.config.get("max_cpu", 100)  # 默认值为100，如果配置文件中没有该项

@@ -20,7 +20,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 # ----------------------------------
 data_dir = f"{PROJECT_ROOT}/communication/data"
 
-save_dir = f"{PROJECT_ROOT}/predictor/data"
+save_dir = f"{PROJECT_ROOT}/predictor/model"
 
 # 加载三个数据集
 gathered = np.load(f"{data_dir}/gathered.npy")  # 形状 (n,28,6,4)
@@ -539,7 +539,7 @@ def train_example(epochs: int = 500,
                   pos_weight: float = 2.0,
                   device: str = "cuda",
                   service_mode: str = "attention",
-                  save_dir: str = f"{PROJECT_ROOT}/predictor/data",
+                  save_dir: str = f"{PROJECT_ROOT}/predictor/model",
                   window_size: int = 10,
                   pred_window: int = 5,
                   threshold: int = 500):
