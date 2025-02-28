@@ -509,6 +509,8 @@ class UCB_Bandit:
         for service in new_allocation:
             if new_allocation[service] < 0.2:  # 资源分配下限保护
                 new_allocation[service] = 0.2
+        
+        set_cpu_limit(new_allocation, self.replica_dict)
 
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)

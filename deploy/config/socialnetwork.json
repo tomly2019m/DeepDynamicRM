@@ -1,6 +1,7 @@
 {
     "name": "socialnetwork",
     "replica_cpus": 1,
+    "max_cpu": 256,
     "scalable_service": [
         "nginx-thrift",
         "compose-post-service",

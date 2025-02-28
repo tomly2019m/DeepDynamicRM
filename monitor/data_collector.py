@@ -20,6 +20,9 @@ service_container: dict[str, list[str]] = {}
 # 服务名列表
 services: list[str] = []
 
+# 可分配的服务列表
+scalable_service: list[str] = []
+
 # 容器名 -> 容器id
 container_name_id: dict[str, str] = {}
 
@@ -48,12 +51,13 @@ benchmark_name = "socialnetwork"
 
 
 def load_services():
-    global services, service_container, container_name_id, container_id_pid
+    global services, service_container, container_name_id, container_id_pid, scalable_service
     with open(f"{PROJECT_ROOT}/deploy/config/socialnetwork.json", "r") as f:
         config = json.load(f)
         # 从配置文件中获取所有服务名
         service_dict = config["service"]
         services = list(service_dict.keys())
+        scalable_service = config["scalable_service"]
         # 初始化service_container
         service_container = {service: [] for service in services}
         # 初始化container_name_id
@@ -445,12 +449,14 @@ def init_collector():
 
 
 # 配置cpu限制 输入参数是一个字典，key是service name，value是该service中每个replicas的cpu限制
-def set_cpu_limit(cpu_limit: dict[str, int]):
-    global service_container
+def set_cpu_limit(cpu_limit: dict[str, int], replicas: dict[str, int]):
+    global service_container, scalable_service
     for service, limit in cpu_limit.items():
-        for container_name in service_container[service]:
-            command = f"docker update --cpu-quota {limit} {container_name}"
-            execute_command(command)
+        if service in scalable_service:
+            limit = limit / replicas[service]
+            for container_name in service_container[service]:
+                command = f"docker update --cpu-quota {limit} {container_name}"
+                execute_command(command)
 
 
 def test_to_numpy():

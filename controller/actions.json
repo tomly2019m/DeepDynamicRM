@@ -1,0 +1,38 @@
+[
+    {
+        "type": "increase",
+        "value": 1
+    },
+    {
+        "type": "decrease",
+        "value": 0.5
+    },
+    {
+        "type": "increase_batch",
+        "value": 1
+    },
+    {
+        "type": "decrease_batch",
+        "value": 0.5
+    },
+    {
+        "type": "increase_percent",
+        "value": 0.25
+    },
+    {
+        "type": "decrease_percent",
+        "value": 0.1
+    },
+    {
+        "type": "reset",
+        "value": 0
+    },
+    {
+        "type": "hold",
+        "value": 0
+    },
+    {
+        "type": "recover",
+        "value": 0
+    }
+]

@@ -1,6 +1,8 @@
 import asyncio
+from copy import deepcopy
 import json
 import os
+from pathlib import Path
 import sys
 import time
 from typing import Dict, Tuple
@@ -16,6 +18,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
 from communication.master import SlaveConnection
+from predictor.slo_predictor import OnlineScaler
+from monitor.data_collector import *
 
 
 class Env:
@@ -39,17 +43,86 @@ class Env:
         self.window_size = window_size
 
         # 保存缓存数据 当达到10个时间步的数据之后再开始执行决策
-        self.buffer = []
+        self.buffer = deque(maxlen=self.window_size)
+        self.latency_buffer = deque(maxlen=self.window_size)
 
         # 在预测器训练时，得到的归一化器
         self.scalers = []
         self._load_scalers()
 
-    # 加载配置文件
+        # 在线标准化器 用于处理动态的服务结构
+        self.online_scaler = OnlineScaler()
+
+        # 可选动作列表
+        self.actions = []
+        self._load_actions()
+
+        # 保存资源配置历史
+        self.allocation_history = []
+
+        # 保存从部署配置文件中读取默认服务配置
+        self.default_cpu_config: dict[str, dict[str, float]] = {}
+
+        self.allocate_dict: dict[str, float] = {}  # 每个服务总的cpu分配
+        self.replica_dict: dict[str, int] = {}
+
+        self.initial_allocation: dict[str, float] = {}  # 初始分配方案，用于reset
+        self.max_cpu = 0
+        self._load_service_default_config()
+
+        # 当前的cpu状态，从gathered中获取
+        self.cpu_state = {}
+
+        # 奖励参数
+        self.w1, self.w2, self.w3, self.s4 = 0, 0, 0, 0
+        self.pv = 0  # pv阈值
+        self.threshold = 0  # SLO阈值
+        self._load_reward_config()
+
+    # 加载集群配置文件
     def _load_config(self, path):
         with open(path, "r") as f:
             config = json.load(f)
         return config["master"], config["slaves"], config["port"]
+
+    def _load_service_default_config(self):
+        """
+        从配置文件中加载并生成 allocate_dict 和 replica_dict，初始化初始分配字典，初始化默认cpu配置
+        """
+        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config",
+                                        "socialnetwork.json")
+
+        try:
+            with open(config_file_path, "r") as f:
+                config = json.load(f)
+
+            # 提取可扩展服务列表
+            self.scalable_service = config.get("scalable_service", [])
+
+            self.max_cpu = config.get("max_cpu", 256)
+
+            # 提取完整服务配置
+            self.default_cpu_config = config.get("service", {})
+
+            # 自动生成 allocate_dict 和 replica_dict
+            for service_name, service_conf in self.default_cpu_config.items():
+                # CPU分配：直接使用配置中的 cpus 字段
+                self.allocate_dict[service_name] = service_conf.get(
+                    "cpus", 0.0)
+                self.initial_allocation = deepcopy(self.allocate_dict)
+
+                # 副本数：使用配置中的 replica 字段
+                self.replica_dict[service_name] = service_conf.get(
+                    "replica", 1)
+
+            print(f"已自动生成初始分配：{len(self.allocate_dict)} 个服务的CPU配置")
+
+        except FileNotFoundError:
+            print(f"[错误] 部署配置文件 {config_file_path} 不存在！")
+            raise  # 配置文件不存在时直接抛出异常
+        except json.JSONDecodeError as e:
+            print(f"[错误] 配置文件解析失败: {str(e)}")
+            raise
 
     # 配置slave节点，在所有slave节点上启动监听
     def _setup_slaves(self):
@@ -106,6 +179,42 @@ class Env:
         except Exception as e:
             raise RuntimeError(f"加载标准化器失败: {str(e)}")
 
+    def _load_actions(self):
+        """加载并验证动作配置文件"""
+        try:
+            # 使用pathlib构建路径
+            action_path = Path(PROJECT_ROOT) / "controller" / "actions.json"
+
+            # 检查文件是否存在
+            if not action_path.is_file():
+                raise FileNotFoundError(f"动作配置文件不存在: {action_path}")
+
+            # 明确指定utf-8编码
+            with action_path.open('r', encoding='utf-8') as f:
+                actions = json.load(f)
+
+        except FileNotFoundError as e:
+            print(f"关键错误: {str(e)}")
+            raise
+        except json.JSONDecodeError:
+            print("JSON格式错误，请检查配置文件语法")
+            raise
+        except (ValueError, KeyError) as e:
+            print(f"配置验证失败: {str(e)}")
+            raise
+        except Exception as e:
+            print(f"未知错误: {str(e)}")
+            raise
+
+    def _load_reward_config(self):
+        config_path = Path(PROJECT_ROOT) / "controller" / "reward.json"
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            self.w1, self.w2, self.w3, self.w4 = config["w1"], config[
+                "w2"], config["w3"], config["w4"]
+            self.pv = config["pv"]
+            self.threshold = config["threshold"]
+
     # 建立slave连接
     async def create_connections(self):
         """异步建立所有Slave连接并初始化"""
@@ -136,7 +245,23 @@ class Env:
 
         print(f"成功建立 {len(self.connections)} 个Slave连接")
 
-    # 数据采集接口 获取一次数据
+    def merge_replicas(self, gathered, replicas):
+        # 将三维服务数据展平为二维 (service_num,6*4=24)
+        flattened_service = gathered.reshape(gathered.shape[0], -1)
+
+        # 将一维副本数据转为列向量 (service_num,1)
+        replicas_col = replicas.reshape(-1, 1)
+
+        # 按列方向拼接，最终形状 (service_num,24+1=25)
+        merged = np.concatenate([flattened_service, replicas_col], axis=1)
+        return merged
+
+    def close_all_connections(self):
+        """关闭所有连接"""
+        for connection in self.connections.values():
+            connection.close()
+
+    # 数据采集接口 获取一个时间步的数据
     async def gather_data(self):
         tasks = []
         replicas = []
@@ -160,100 +285,52 @@ class Env:
             ]).flatten()
         for k, v in gathered["cpu"].items():
             gathered["cpu"][k] = [item / 1e6 for item in v]
+        self.cpu_state = gathered["cpu"]
         latency = get_latest_latency()
         gathered["cpu"] = process_data(gathered["cpu"])
         gathered["memory"] = process_data(gathered["memory"])
         gathered["io"] = process_data(gathered["io"])
         gathered["network"] = process_data(gathered["network"])
-        # 转化为(service_num, 6, 4)
-        gathered = transform_data(gathered)
+        gathered = transform_data(gathered)  # 转化为(service_num, 6, 4)
+        status = self.merge_replicas(gathered, replicas)  # (service_num, 25)
+        return status, get_latest_latency()
 
     async def warmup(self):
-        """异步预热10秒"""
-        print("Starting async warmup...")
-        for _ in range(10):
-            gathered = await self._async_gather()
-            processed = self._process_data(gathered)
-            self.state_buffer.append(processed)
-            await asyncio.sleep(1)
-        print(f"Warmup completed. Buffer size: {len(self.state_buffer)}")
+        """预热，倒计时10秒填充buffer"""
+        self.buffer = []
+        self.latency_buffer = []
+        countdown = 10
 
-    async def _async_gather(self):
-        """异步数据采集核心逻辑"""
-        gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
+        while countdown > 0:
+            data, latency = await self.gather_data()
+            self.buffer.append(data)
+            self.latency_buffer.append(latency)
+            time.sleep(1)
+            countdown -= 1
+            print(f"剩余预热时间: {countdown}秒")
 
-        # 并发采集所有节点数据
-        tasks = []
-        for conn in self.connections.values():
-            tasks.append(asyncio.create_task(conn.send_command("collect")))
+    def get_state_and_latency(self):
+        """返回形状为 (10,28,25) 和 (10,5) 的归一化数据"""
+        service_data = np.array(self.buffer)  # 形状 (10,28,25)
+        latency_data = np.array(self.latency_buffer)  # 形状 (10,5)
 
-        results = await asyncio.gather(*tasks)
+        # ========== 服务数据处理 ==========
+        processed_serv = np.zeros_like(service_data)
+        for s in range(28):  # 遍历每个服务
+            # 提取特征 (10,24)
+            features = service_data[:, s, :24]
+            scaled = self.scalers["service"][s].transform(
+                features)  # 输入 (10,24)
 
-        # 合并数据
-        for result in results:
-            data = json.loads(result)
-            for metric in ["cpu", "memory", "io", "network"]:
-                gathered[metric] = concat_data(gathered[metric], data[metric])
+            # 回填数据
+            processed_serv[:, s, :24] = scaled
+            processed_serv[:, s, 24] = service_data[:, s, 24]  # 副本数不变
 
-        # CPU单位转换
-        for k in gathered["cpu"]:
-            gathered["cpu"][k] = [v / 1e6 for v in gathered["cpu"][k]]
+        # ========== 延迟数据处理 ==========
+        processed_lat = self.scalers["latency"].transform(
+            latency_data)  # 输入 (10,5)
 
-        return gathered
-
-    def _process_data(self, raw_gathered):
-        """数据处理流水线"""
-        processed = {}
-        for metric in ["cpu", "memory", "io", "network"]:
-            # 先转换再处理
-            transformed = transform_data(raw_gathered[metric])
-            processed[metric] = process_data(transformed)
-        return processed
-
-    def _get_state_window(self):
-        """生成(10,28,25)状态窗口"""
-        # 自动填充不足的时间步
-        while len(self.state_buffer) < self.window_size:
-            self.state_buffer.appendleft(self.state_buffer[-1] if self.
-                                         state_buffer else self._empty_state())
-
-        # 转换为numpy数组 (10,28,25)
-        window = np.stack(
-            [self._vectorize_state(s) for s in self.state_buffer])
-
-        # 标准化处理
-        return self._normalize_window(window)
-
-    def _vectorize_state(self, processed_data):
-        """将处理后的数据转换为(28,25)特征矩阵"""
-        vector = np.zeros((28, 25))
-
-        for service_id in range(28):
-            # 原始特征 (假设每个metric处理后得到6个特征)
-            features = []
-            for metric in ["cpu", "memory", "io", "network"]:
-                features.extend(processed_data[metric].get(
-                    service_id, [0] * 6))
-
-            # 添加副本数特征
-            replicas = len(processed_data["cpu"].get(service_id, []))
-            features.append(replicas)
-
-            vector[service_id] = features[:25]  # 截断至25维
-
-        return vector
-
-    def _normalize_window(self, window):
-        """窗口数据标准化 (10,28,25)"""
-        normalized = window.copy()
-        for service_id in range(28):
-            # 仅标准化前24个特征
-            service_data = window[:, service_id, :24]
-            self.scalers[service_id].partial_fit(service_data)
-            normalized[:,
-                       service_id, :24] = self.scalers[service_id].transform(
-                           service_data)
-        return normalized
+        return processed_serv, processed_lat  # 形状 (10,28,25), (10,5)
 
     async def step(self, action):
         """异步执行环境步"""
@@ -283,46 +360,134 @@ class Env:
         return state, reward, done, {}
 
     async def _execute_action(self, action):
-        """执行资源分配动作（与MAB集成）"""
-        # 这里与您现有的MAB逻辑集成
-        from mylocust.strategy.mab import MABController
+        """执行资源分配动作"""
+        action_type = self.actions[action]["type"]
+        action_value = self.actions[action]["value"]
 
-        # 选择臂
-        arm_id = MABController.select_arm(action)
+        # 保存当前状态到历史记录（用于recover）
+        self.allocation_history.append(deepcopy(self.allocate_dict))
+        if len(self.allocation_history) > 10:  # 保留最近10次记录
+            self.allocation_history.pop(0)
+        load = {}
+        for service in self.allocate_dict:
+            mean_util = self.cpu_state[service][2]  # 获取平均利用率
+            load[service] = (mean_util * 100) / self.allocate_dict[service]
 
-        # 执行动作（假设异步接口）
-        await MABController.async_execute_action(
-            arm_id, self.state_buffer[-1]["cpu"] if self.state_buffer else {})
+        new_allocation = deepcopy(self.allocate_dict)
 
-        # 记录副本数变化
-        current_replicas = np.array([
-            len(cpu_list)
-            for cpu_list in self.state_buffer[-1]["cpu"].values()
-        ])
-        self.replicas_history.append(current_replicas)
+        if action_type == "increase":
+            # 找到负载最高的服务增加资源
+            target_service = max(load, key=lambda k: load[k])
+            new_cpu = self.allocate_dict[target_service] + action["value"]
+            new_cpu = min(new_cpu,
+                          self.default_cpu_config[target_service]["max_cpus"])
+            new_allocation[target_service] = new_cpu
 
-    def _calculate_reward(self, state_window, latency):
-        """综合奖励计算"""
-        # 1. SLO违例惩罚（假设SLO为1.0秒）
-        slo_violation = 1.0 if latency > 1.0 else 0.0
-        slo_penalty = -10.0 * slo_violation
+        elif action_type == "decrease":
+            # 找到负载最低的服务减少资源
+            target_service = min(load, key=lambda k: load[k])
+            new_allocation[target_service] = max(
+                0.2,  # 保持最小分配量
+                new_allocation[target_service] - action_value,
+            )
 
-        # 2. 资源利用率奖励（取窗口平均）
-        cpu_util = np.mean(state_window[:, :, 0])  # 假设第0列是CPU利用率
-        util_reward = 5.0 * cpu_util
+        elif action_type == "increase_batch":
+            # 增加前所有可调服务的CPU配额
+            candidates = self.scalable_service
+            for service in candidates:
+                new_allocation[service] = min(
+                    self.default_cpu_config[service]["max_cpus"],
+                    new_allocation[service] + action["value"],
+                )
 
-        # 3. 负载均衡奖励
-        balance_penalty = -2.0 * np.std(state_window[-1, :, 24])  # 副本数标准差
+        elif action_type == "decrease_batch":
+            candidates = self.scalable_service
+            for service in candidates:
+                new_allocation[service] = max(
+                    0.2, new_allocation[service] - action["value"])
 
-        # 4. 调整成本惩罚
-        if len(self.replicas_history) >= 2:
-            delta = np.abs(self.replicas_history[-1] -
-                           self.replicas_history[-2]).sum()
-            adjust_penalty = -0.1 * delta
+        elif action_type == "increase_percent":
+            # 按百分比增加高负载服务
+            target_service = max(load, key=lambda k: load[k])
+            new_allocation[target_service] = min(
+                self.default_cpu_config[target_service]["max_cpus"],
+                new_allocation[target_service] * (1 + action["value"]),
+            )
+
+        elif action_type == "decrease_percent":
+            # 按百分比减少低负载服务
+            target_service = min(load, key=lambda k: load[k])
+            new_allocation[target_service] = max(
+                0.2, new_allocation[target_service] * (1 - action["value"]))
+
+        elif action_type == "reset":
+            # 重置到初始配置
+            new_allocation = deepcopy(self.initial_allocation)
+
+        elif action_type == "hold":
+            # 保持当前状态
+            pass
+
+        elif action_type == "recover":
+            # 恢复到上一次有效分配
+            if len(self.allocation_history) >= 2:
+                new_allocation = deepcopy(self.allocation_history[-2])
+                self.allocation_history.pop(-1)  # 移除当前无效记录
+
+        for service in new_allocation:
+            if new_allocation[service] < 0.2:  # 资源分配下限保护
+                new_allocation[service] = 0.2
+
+        set_cpu_limit(new_allocation, self.replica_dict)
+        # 更新状态记录
+        self.last_allocate = deepcopy(self.allocate_dict)
+        self.allocate_dict = new_allocation
+
+    def _calculate_reward(self, pv, latency):
+        """综合奖励计算
+        Args:
+            pv: 未来5个时间步的平均违例概率（0~1） 由预测器给出
+            latency: 当前延迟值
+        """
+        # 获取参数配置
+        w1 = self.w1  # 资源节约奖励系数
+        w2 = self.w2  # 未来风险惩罚系数
+        w3 = self.w3  # 违例惩罚强度系数
+        w4 = self.w4  # 持续风险抑制系数
+        threshold = self.threshold  # SLO延迟阈值
+        allocated = sum(self.allocate_dict.values())  # 当前已分配CPU
+
+        if latency <= threshold:
+            # --------------------------
+            # 状态1：SLO未违例（资源优化模式）
+            # --------------------------
+            # 资源节约奖励（标准化到0~1）
+            cpu_util = allocated / self.max_cpu
+            resource_reward = w1 * (1 - cpu_util)
+
+            # 未来风险惩罚（非线性响应）
+            if pv <= self.pv:
+                # 低风险区平方惩罚
+                risk_penalty = w2 * (pv**2)
+            else:
+                # 高风险区线性放大
+                risk_penalty = w2 * (2 * pv - 0.5)
+
+            return resource_reward - risk_penalty
+
         else:
-            adjust_penalty = 0.0
+            # --------------------------
+            # 状态2：SLO已违例（紧急恢复模式）
+            # --------------------------
+            # 延迟超阈值惩罚（1.5次方梯度）
+            violation_degree = (latency - threshold) / threshold
+            delay_penalty = w3 * (violation_degree**1.5)
 
-        return slo_penalty + util_reward + balance_penalty + adjust_penalty
+            # 持续未来风险惩罚
+            ongoing_penalty = w4 * pv
+
+            # 总惩罚取负（原始设计全为负数奖励）
+            return -(delay_penalty + ongoing_penalty)
 
     def _empty_state(self):
         """生成空状态占位"""
