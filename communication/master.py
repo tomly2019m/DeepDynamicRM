@@ -18,7 +18,10 @@ from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time", type=int, default=30, help="experiment time")
+parser.add_argument("--exp_time",
+                    type=int,
+                    default=300,
+                    help="experiment time")
 parser.add_argument("--username",
                     type=str,
                     default="tomly",
@@ -51,8 +54,20 @@ class SlaveConnection:
     async def send_command(self, command) -> str:
         if self.socket:
             self.socket.sendall(command.encode())
-            data = self.socket.recv(20480)
-            # print(f'Received from {self.slave_host}:{self.slave_port}:', data.decode())
+            data = b""
+            while True:
+                chunk = self.socket.recv(20480)
+                # 连接关闭时退出
+                if not chunk:
+                    break
+                data += chunk
+                # 检测服务端的结束符
+                if data.endswith(b"\r\n\r\n"):
+                    # 去除结束符并解码
+                    data = data[:-4]
+                    break
+            print(f'Received from {self.slave_host}:{self.slave_port}:',
+                  data.decode())
             return data.decode()
 
     def close(self):
@@ -81,11 +96,11 @@ async def start_experiment(slaves):
     locust_cmd = [
         "locust",  # 命令名称
         "-f",  # 参数：指定locust文件路径
-        "src/socialnetwork.py",  # 你的Locust文件路径
+        f"{PROJECT_ROOT}/mylocust/src/socialnetwork.py",  # 你的Locust文件路径
         "--host",  # 参数：目标主机
         "http://127.0.0.1:8080",
         "--users",  # 用户数参数
-        "2",
+        "50",
         "--csv",  # 输出CSV文件
         "locust_log",
         "--headless",  # 无头模式
@@ -93,18 +108,16 @@ async def start_experiment(slaves):
         f"{exp_time + 100}s",  # 100秒运行时间
     ]
 
+    print(f"locust command:{locust_cmd}")
+
     try:
         # 创建子进程，不等待立即返回
-        process = await asyncio.to_thread(lambda: subprocess.Popen(
-            locust_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,  # 自动解码文本
-            start_new_session=True,  # 独立会话
-        ))
+        process = await asyncio.create_subprocess_exec(
+            *locust_cmd,
+            stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
+            stderr=asyncio.subprocess.DEVNULL)
 
-        # 可选：立即返回成功信息（或根据需要返回进程ID）
-        print(f"Locust进程已启动 (PID: {process.pid})")
+        print(f"Locust已启动，PID: {process.pid}")
 
     except Exception as e:
         # 捕获启动错误（如命令不存在、路径错误等）
@@ -112,6 +125,9 @@ async def start_experiment(slaves):
         raise
 
     mab = UCB_Bandit()
+
+    # 等待负载稳定
+    time.sleep(10)
 
     current_exp_time = 0
     try:
@@ -144,7 +160,9 @@ async def start_experiment(slaves):
                 gathered["cpu"][k] = [item / 1e6 for item in v]
 
             arm_id = mab.select_arm()
-            mab.execute_action(arm_id, gathered["cpu"])
+            new_allocate = mab.execute_action(arm_id, gathered["cpu"])
+            print(f"新的分配方案：{new_allocate}")
+            print(f"总CPU分配数量：{sum(new_allocate.values())}")
             latency = get_latest_latency()
             reward = mab.calculate_reward(latency)
             mab.update(arm_id, reward)

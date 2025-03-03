@@ -1,6 +1,7 @@
 {
     "master": "rm1",
     "slaves": [
+        "rm1",
         "rm2",
         "rm3",
         "rm4"

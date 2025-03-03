@@ -61,7 +61,8 @@ def slave_listen(master_host, master_port):
 
                 if result == "stop" or not result:
                     break
-                # 返回结果
+                # 返回结果，添加结束符
+                result = f"{result}\r\n\r\n"
                 conn.sendall(result.encode())
 
 

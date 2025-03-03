@@ -1,5 +1,5 @@
 {
-    "max_cpu" : 256,
+    "max_cpu" : 270,
     "cpu_factor" : 1,
     "latency_factor": 1
 }
