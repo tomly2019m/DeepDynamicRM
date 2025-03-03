@@ -1,3 +1,5 @@
 {
-    "cmake.ignoreCMakeListsMissing": true
+    "cmake.ignoreCMakeListsMissing": true,
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.autoImportCompletions": false
 }

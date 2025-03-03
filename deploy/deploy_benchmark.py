@@ -30,11 +30,17 @@ parser.add_argument("--username",
                     type=str,
                     default="tomly",
                     help="username for ssh")
+parser.add_argument("--benchmark_name",
+                    type=str,
+                    default="socialnetwork",
+                    help="benchmark name")
 args = parser.parse_args()
 
 username = args.username
 docker_compose_file = args.docker_compose
 benchmark_config = args.benchmark_config
+
+benchmark_name = ""
 
 
 # 加载配置文件
@@ -181,13 +187,14 @@ def deploy_benchmark():
             if err:
                 raise RuntimeError(f"执行检查服务副本命令出错: {err}")
             print("service: ", service.name, "replicas: ", out)
-            if '(' in result:
-                result = result.split('(')[0]
-                actual = int(result.split('/')[0])
-                desired = int(result.split('/')[1])
-                converged = actual == desired
-                if not converged:
-                    break
+            raw_replicas = out.split('(')[0].strip()
+
+            actual = int(raw_replicas.split('/')[0])
+            desired = int(raw_replicas.split('/')[1])
+            converged = actual == desired
+            if not converged:
+                break
+
         time.sleep(5)
         waits += 1
         if waits > 30:
@@ -237,7 +244,13 @@ def test_check_node_label():
 
 
 if __name__ == "__main__":
-    test_dissolve()
-    test_setup()
+    # test_dissolve()
+    # test_setup()
+    # deploy_benchmark()
+
+    dissolve_cluster()
+    init_master()
+    setup_swarm_cluster()
     deploy_benchmark()
+    init_data()
     pass
