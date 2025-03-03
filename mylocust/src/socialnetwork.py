@@ -18,7 +18,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 project_root = "~/DeepDynamicRM"
 
-image_dir = f"{project_root}/locust/base64_images"
+image_dir = f"{project_root}/mylocust/base64_images"
 image_dir = os.path.expanduser(image_dir)
 
 image_data = {}

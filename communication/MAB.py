@@ -46,11 +46,11 @@ class MAB:
                 "type": "decrease_percent",
                 "value": 0.1
             },
-            # 重置
-            {
-                "type": "reset",
-                "value": 0
-            },
+            # # 重置
+            # {
+            #     "type": "reset",
+            #     "value": 0
+            # },
             # 保持
             {
                 "type": "hold",
@@ -261,11 +261,11 @@ class UCB_Bandit:
                 "type": "decrease_percent",
                 "value": 0.1
             },
-            # 重置
-            {
-                "type": "reset",
-                "value": 0
-            },
+            # # 重置
+            # {
+            #     "type": "reset",
+            #     "value": 0
+            # },
             # 保持
             {
                 "type": "hold",
@@ -299,6 +299,10 @@ class UCB_Bandit:
 
         # 保存可调节的服务列表
         self.scalable_service = []
+
+        # 配置初始化
+        self.setup_config()
+        self._load_deployment_config()
 
     def setup_config(self):
         """
@@ -355,11 +359,18 @@ class UCB_Bandit:
             print(f"[错误] 配置文件解析失败: {str(e)}")
             raise
 
-    def select_arm(self):
+    def select_arm(self, latency):
         """选择要拉动的臂（基于UCB公式）"""
         ucb_values = np.zeros(self.k)
+        # 在没超出slo之前 一直使用decrease策略
+        arm_list = [1, 3, 5, 6]
 
-        for arm in range(self.k):
+        latency = latency[-2]  # P99延迟
+
+        if latency > 500:
+            arm_list = [i for i in range(self.k)]
+
+        for arm in arm_list:
             if self.counts[arm] == 0:  # 未尝试过的臂优先选择
                 ucb_values[arm] = float("inf")
             else:
@@ -370,7 +381,8 @@ class UCB_Bandit:
 
         # 选择UCB值最大的臂（若有多个则随机选择）
         max_ucb = np.max(ucb_values)
-        candidates = np.where(ucb_values == max_ucb)
+        # np.where(condition)返回一个元组，其中每个元素对应一个维度的索引数组。
+        candidates = np.where(ucb_values == max_ucb)[0]
         return np.random.choice(candidates)
 
     def update(self, chosen_arm, reward):
@@ -387,18 +399,19 @@ class UCB_Bandit:
         """
         根据分配的CPU数量和延迟来计算奖励
         CPU数量映射：从0到max_cpu映射到1到0
-        延迟映射：从0到500映射到0.5到0，超过500则返回-1的奖励
+        延迟映射：从0到500映射到0.1到0，超过500则返回-1的奖励
         """
         # 计算当前的总CPU分配
         total_cpu_allocation = 0
         for service in self.allocate_dict:
             total_cpu_allocation += self.allocate_dict[service]
-        
-        latency = latency[-2] # P99延迟
+
+        latency = latency[-2]  # P99延迟
 
         # 获取配置中的最大CPU数
         max_cpu = self.config.get("max_cpu", 100)  # 默认值为100，如果配置文件中没有该项
 
+        cpu_reward, latency_reward = 0, 0
         # 计算CPU奖励（映射：0->max_cpu 映射到 1->0）
         if total_cpu_allocation <= max_cpu:
             cpu_reward = 1 - (total_cpu_allocation / max_cpu)
@@ -407,10 +420,11 @@ class UCB_Bandit:
 
         # 延迟奖励映射：如果延迟小于500，按比例映射；如果超过500，返回-1
         if latency < 500:
-            latency_reward = 0.5 - (latency / 1000)  # 映射到0.5到0之间
+            latency_reward = 0.1 - (latency / 1000)  # 映射到0.5到0之间
         elif latency >= 500:
             latency_reward = -1  # 超过500的延迟，奖励为-1
 
+        print(f"CPU奖励:{cpu_reward}, 延迟奖励:{latency_reward}")
         # 总奖励为CPU奖励和延迟奖励的加权和
         total_reward = (self.config["cpu_factor"] * cpu_reward +
                         self.config["latency_factor"] * latency_reward)
@@ -441,7 +455,7 @@ class UCB_Bandit:
 
         # 计算所有服务的负载水平（利用率 / 分配资源）
         load = {}
-        for service in self.allocate_dict:
+        for service in self.scalable_service:
             mean_util = cpu_state[service][2]  # 获取平均利用率
             load[service] = (mean_util * 100) / self.allocate_dict[service]
 
@@ -458,7 +472,13 @@ class UCB_Bandit:
 
         elif action_type == "decrease":
             # 找到负载最低的服务减少资源
-            target_service = min(load, key=lambda k: load[k])
+            # 过滤掉 allocate 值为 0.2 的服务
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                0.2 > 1e-4  # 检查 allocate 值是否为 0.2
+            ]
+
+            target_service = min(candidates, key=lambda k: candidates[k])
             new_allocation[target_service] = max(
                 0.2,  # 保持最小分配量
                 new_allocation[target_service] - action_value,
@@ -489,7 +509,13 @@ class UCB_Bandit:
 
         elif action_type == "decrease_percent":
             # 按百分比减少低负载服务
-            target_service = min(load, key=lambda k: load[k])
+            # 过滤掉 allocate 值为 0.2 的服务
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                0.2 > 1e-4  # 检查 allocate 值是否为 0.2
+            ]
+
+            target_service = min(candidates, key=lambda k: candidates[k])
             new_allocation[target_service] = max(
                 0.2, new_allocation[target_service] * (1 - action["value"]))
 
@@ -511,7 +537,7 @@ class UCB_Bandit:
         for service in new_allocation:
             if new_allocation[service] < 0.2:  # 资源分配下限保护
                 new_allocation[service] = 0.2
-        
+
         set_cpu_limit(new_allocation, self.replica_dict)
 
         # 更新状态记录

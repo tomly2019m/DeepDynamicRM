@@ -66,8 +66,8 @@ class SlaveConnection:
                     # 去除结束符并解码
                     data = data[:-4]
                     break
-            print(f'Received from {self.slave_host}:{self.slave_port}:',
-                  data.decode())
+            # print(f'Received from {self.slave_host}:{self.slave_port}:',
+            #       data.decode())
             return data.decode()
 
     def close(self):
@@ -102,7 +102,7 @@ async def start_experiment(slaves):
         "--users",  # 用户数参数
         "50",
         "--csv",  # 输出CSV文件
-        "locust_log",
+        f"{PROJECT_ROOT}/mylocust/locust_log",
         "--headless",  # 无头模式
         "-t",  # 测试时长
         f"{exp_time + 100}s",  # 100秒运行时间
@@ -127,7 +127,7 @@ async def start_experiment(slaves):
     mab = UCB_Bandit()
 
     # 等待负载稳定
-    time.sleep(10)
+    time.sleep(5)
 
     current_exp_time = 0
     try:
@@ -149,7 +149,7 @@ async def start_experiment(slaves):
                 gathered["io"] = concat_data(gathered["io"], data_dict["io"])
                 gathered["network"] = concat_data(gathered["network"],
                                                   data_dict["network"])
-            if replicas == []:
+            if len(replicas):
                 replicas = np.array([
                     len(cpu_list) for cpu_list in gathered["cpu"].values()
                 ]).flatten()
@@ -159,18 +159,22 @@ async def start_experiment(slaves):
             for k, v in gathered["cpu"].items():
                 gathered["cpu"][k] = [item / 1e6 for item in v]
 
-            arm_id = mab.select_arm()
-            new_allocate = mab.execute_action(arm_id, gathered["cpu"])
-            print(f"新的分配方案：{new_allocate}")
-            print(f"总CPU分配数量：{sum(new_allocate.values())}")
-            latency = get_latest_latency()
-            reward = mab.calculate_reward(latency)
-            mab.update(arm_id, reward)
-
             gathered["cpu"] = process_data(gathered["cpu"])
             gathered["memory"] = process_data(gathered["memory"])
             gathered["io"] = process_data(gathered["io"])
             gathered["network"] = process_data(gathered["network"])
+
+            latency = get_latest_latency()
+            print(f"当前延迟{latency}")
+            arm_id = mab.select_arm(latency=latency)
+            print(f"选择动作{arm_id}, {mab.actions[arm_id]}")
+            # print(gathered["cpu"])
+            new_allocate = mab.execute_action(arm_id, gathered["cpu"])
+            print(f"新的分配方案：{new_allocate}")
+            print(f"总CPU分配数量：{sum(new_allocate.values())}")
+
+            reward = mab.calculate_reward(latency)
+            mab.update(arm_id, reward)
 
             gathered = transform_data(gathered)
             # print(time.time() - s)
@@ -184,6 +188,9 @@ async def start_experiment(slaves):
             if exp_time == 0:
                 break
     finally:
+        # 清理locust进程
+        _, _ = execute_command(f"sudo kill {process.pid}")
+        # 关闭所有连接
         for connection in connections.values():
             connection.close()
 

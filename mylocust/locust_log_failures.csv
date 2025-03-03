@@ -1,1 +1,2 @@
 Method,Name,Error,Occurrences
+POST,compose_post,HTTPError('500 Server Error: Internal Server Error for url: compose_post'),7

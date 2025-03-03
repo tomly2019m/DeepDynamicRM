@@ -456,7 +456,9 @@ def set_cpu_limit(cpu_limit: dict[str, int], replicas: dict[str, int]):
             limit = limit / replicas[service]
             for container_name in service_container[service]:
                 command = f"docker update --cpu-quota {limit} {container_name}"
-                execute_command(command)
+                _, err = execute_command(command)
+                if err:
+                    print(f"设置cpu limit 出错{err}")
 
 
 def test_to_numpy():

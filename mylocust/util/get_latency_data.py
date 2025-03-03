@@ -5,7 +5,7 @@ import numpy as np
 project_root = "~/DeepDynamicRM"
 
 # 定义文件路径
-log_path = f"{project_root}/locust/locust_log_stats_history.csv"
+log_path = f"{project_root}/mylocust/locust_log_stats_history.csv"
 
 # 定义需要提取的字段（对应CSV列名）
 percentile_columns = [
