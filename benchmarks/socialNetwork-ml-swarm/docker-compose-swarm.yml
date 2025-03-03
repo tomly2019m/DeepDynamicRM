@@ -466,8 +466,8 @@ services:
       replicas: 16
       placement:
         max_replicas_per_node: 8
-        # constraints:
-        #   - node.labels.type == compute
+        constraints:
+          - node.labels.type == compute
     volumes:
       - ./config:/social-network-microservices/config
     sysctls:

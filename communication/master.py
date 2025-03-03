@@ -36,6 +36,7 @@ save = args.save
 
 gathered_list = []  # 用于存储每次循环处理后的 gathered 数据
 replicas = []
+service_replicas = {}
 latency_list = []
 
 
@@ -53,6 +54,8 @@ class SlaveConnection:
 
     async def send_command(self, command) -> str:
         if self.socket:
+            # 添加结束标记
+            command = f"{command}\r\n\r\n"
             self.socket.sendall(command.encode())
             data = b""
             while True:
@@ -77,7 +80,7 @@ class SlaveConnection:
 
 
 async def start_experiment(slaves):
-    global exp_time, gathered_list, replicas
+    global exp_time, gathered_list, replicas, service_replicas
     connections: Dict[Tuple[str, int], SlaveConnection] = {}
     tasks = []
 
@@ -153,8 +156,13 @@ async def start_experiment(slaves):
                 replicas = np.array([
                     len(cpu_list) for cpu_list in gathered["cpu"].values()
                 ]).flatten()
+                service_replicas = {
+                    key: len(cpu_list)
+                    for key, cpu_list in gathered["cpu"].items()
+                }
+
             # print(replicas)
-            print(f"当前实验进度: {current_exp_time}/{exp_time}")
+            print(f"当前实验进度: {current_exp_time}/{args.exp_time}")
             print(gathered)
             for k, v in gathered["cpu"].items():
                 gathered["cpu"][k] = [item / 1e6 for item in v]
@@ -172,6 +180,19 @@ async def start_experiment(slaves):
             new_allocate = mab.execute_action(arm_id, gathered["cpu"])
             print(f"新的分配方案：{new_allocate}")
             print(f"总CPU分配数量：{sum(new_allocate.values())}")
+
+            print(f"更新cpu配置....")
+            # 转化为每副本的配置
+            for service in new_allocate:
+                new_allocate[service] /= service_replicas[service]
+            tasks.clear()
+            # 异步发送给每个slave 执行set limit
+            for connection in connections.values():
+                tasks.append(
+                    asyncio.create_task(
+                        connection.send_command(
+                            f"update{json.dumps(new_allocate)}")))
+            results = await asyncio.gather(*tasks)
 
             reward = mab.calculate_reward(latency)
             mab.update(arm_id, reward)

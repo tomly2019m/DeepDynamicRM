@@ -448,14 +448,13 @@ def init_collector():
 #         }
 
 
-# 配置cpu限制 输入参数是一个字典，key是service name，value是该service中每个replicas的cpu限制
-def set_cpu_limit(cpu_limit: dict[str, int], replicas: dict[str, int]):
+# 配置cpu限制 输入参数是一个字典，key是service name value是cpu limit的具体值 已经经过处理 转化为每个副本的cpu limit
+def set_cpu_limit(cpu_limit: dict[str, int]):
     global service_container, scalable_service
     for service, limit in cpu_limit.items():
         if service in scalable_service:
-            limit = limit / replicas[service]
             for container_name in service_container[service]:
-                command = f"docker update --cpu-quota {limit} {container_name}"
+                command = f"docker update --cpus={limit} {container_name}"
                 _, err = execute_command(command)
                 if err:
                     print(f"设置cpu limit 出错{err}")

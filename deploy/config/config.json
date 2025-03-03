@@ -16,7 +16,7 @@
             {
                 "host": "rm4",
                 "name": "rm4",
-                "label": "type=compute",
+                "label": "type=data",
                 "cores": 64
             },
             {

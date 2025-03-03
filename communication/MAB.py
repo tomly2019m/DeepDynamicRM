@@ -420,7 +420,7 @@ class UCB_Bandit:
 
         # 延迟奖励映射：如果延迟小于500，按比例映射；如果超过500，返回-1
         if latency < 500:
-            latency_reward = 0.1 - (latency / 1000)  # 映射到0.5到0之间
+            latency_reward = 0.1 - (latency / 5000)  # 映射到0.5到0之间
         elif latency >= 500:
             latency_reward = -1  # 超过500的延迟，奖励为-1
 
@@ -475,12 +475,13 @@ class UCB_Bandit:
             # 过滤掉 allocate 值为 0.2 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                0.2 > 1e-4  # 检查 allocate 值是否为 0.2
+                0.2 * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 0.2
             ]
+            print(candidates)
 
-            target_service = min(candidates, key=lambda k: candidates[k])
+            target_service = min(candidates, key=lambda k: load[k])
             new_allocation[target_service] = max(
-                0.2,  # 保持最小分配量
+                0.2 * self.replica_dict[target_service],  # 保持最小分配量
                 new_allocation[target_service] - action_value,
             )
 
@@ -497,7 +498,8 @@ class UCB_Bandit:
             candidates = self.scalable_service
             for service in candidates:
                 new_allocation[service] = max(
-                    0.2, new_allocation[service] - action["value"])
+                    0.2 * self.replica_dict[service],
+                    new_allocation[service] - action["value"])
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
@@ -515,9 +517,10 @@ class UCB_Bandit:
                 0.2 > 1e-4  # 检查 allocate 值是否为 0.2
             ]
 
-            target_service = min(candidates, key=lambda k: candidates[k])
+            target_service = min(candidates, key=lambda k: load[k])
             new_allocation[target_service] = max(
-                0.2, new_allocation[target_service] * (1 - action["value"]))
+                0.2 * self.replica_dict[target_service],
+                new_allocation[target_service] * (1 - action["value"]))
 
         elif action_type == "reset":
             # 重置到初始配置
@@ -535,10 +538,10 @@ class UCB_Bandit:
 
         # 验证分配有效性
         for service in new_allocation:
-            if new_allocation[service] < 0.2:  # 资源分配下限保护
-                new_allocation[service] = 0.2
+            if new_allocation[service] < 0.2 * self.replica_dict[service]:  # 资源分配下限保护
+                new_allocation[service] = 0.2 * self.replica_dict[service]
 
-        set_cpu_limit(new_allocation, self.replica_dict)
+        # set_cpu_limit(new_allocation, self.replica_dict)
 
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)

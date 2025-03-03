@@ -18,11 +18,11 @@ port = args.port
 host = '0.0.0.0'  # 监听所有可用接口
 
 
-def handle_command(command):
+def handle_command(command: str):
     # 在这里解析并执行命令
     print('Executing command:', command)
 
-    response = None
+    response = ""
     if command == 'init':
         init_collector()
         print("Collector initialized")
@@ -36,6 +36,11 @@ def handle_command(command):
             "network": get_network_usage()
         }
         response = json.dumps(latest_data)
+
+    elif "update" in command:
+        command = command.replace("update", "")
+        allocate_dict = json.loads(command)
+        set_cpu_limit(allocate_dict)
     return response
 
 
@@ -51,10 +56,16 @@ def slave_listen(master_host, master_port):
         with conn:
             print(f'连接成功: {addr}')
             while True:
-                # 接收数据
-                data = conn.recv(1024)
-                if not data:
-                    break
+                data = b''
+
+                while True:
+                    chunk = conn.recv(20480)
+                    data += chunk
+                    if data.endswith(b"\r\n\r\n"):
+                        # 去除结束符并解码
+                        data = data[:-4]
+                        break
+
                 command = data.decode()
                 # 处理命令
                 result = handle_command(command)

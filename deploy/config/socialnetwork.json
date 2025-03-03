@@ -18,7 +18,9 @@
         "write-user-timeline-service",
         "write-user-timeline-rabbitmq",
         "home-timeline-service",
-        "social-graph-service"
+        "social-graph-service",
+
+        "media-filter-service"
     ],
     "service": {
         "compose-post-redis": {
