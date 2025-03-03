@@ -1,20 +1,29 @@
 {
     "cluster": {
         "master": {
-            "host": "debian1",
-            "name": "debian1",
-            "label": "type=compute"
+            "host": "rm1",
+            "name": "rm1",
+            "label": "type=compute",
+            "cores": 96
         },
         "workers":[
             {
-                "host": "debian2",
-                "name": "debian2",
-                "label": "type=compute"
+                "host": "rm3",
+                "name": "rm3",
+                "label": "type=compute",
+                "cores": 64
             },
             {
-                "host": "Ubuntu24",
-                "name": "Ubuntu24",
-                "label": "type=data"
+                "host": "rm4",
+                "name": "rm4",
+                "label": "type=compute",
+                "cores": 64
+            },
+            {
+                "host": "rm2",
+                "name": "rm2",
+                "label": "type=data",
+                "cores": 32
             }
         ]
     }

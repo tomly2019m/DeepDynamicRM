@@ -1,6 +1,6 @@
 {
     "name": "socialnetwork",
-    "replica_cpus": 1,
+    "replica_cpus": 4,
     "max_cpu": 256,
     "scalable_service": [
         "nginx-thrift",
@@ -22,170 +22,170 @@
     ],
     "service": {
         "compose-post-redis": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "compose-post-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "home-timeline-redis": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "home-timeline-service": {
-            "cpus": 2,
-            "max_cpus": 2,
-            "max_replica": 2,
-            "replica": 2
+            "cpus": 16,
+            "max_cpus": 16,
+            "max_replica": 4,
+            "replica": 4
         },
         "media-filter-service": {
-            "cpus": 48,
-            "max_cpus": 48,
-            "max_replica": 6,
-            "replica": 6
+            "cpus": 128,
+            "max_cpus": 128,
+            "max_replica": 16,
+            "replica": 16
         },
         "media-service": {
             "cpus": 2,
             "max_cpus": 2,
-            "max_replica": 2,
-            "replica": 2
+            "max_replica": 4,
+            "replica": 4
         },
         "nginx-thrift": {
-            "cpus": 2,
-            "max_cpus": 2,
-            "max_replica": 2,
-            "replica": 2
+            "cpus": 16,
+            "max_cpus": 16,
+            "max_replica": 4,
+            "replica": 4
         },
         "post-storage-memcached": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "post-storage-mongodb": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "post-storage-service": {
-            "cpus": 8,
-            "max_cpus": 8,
+            "cpus": 16,
+            "max_cpus": 16,
             "max_replica": 1,
             "replica": 1
         },
         "social-graph-mongodb": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "social-graph-redis": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "social-graph-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "text-filter-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "text-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "unique-id-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "url-shorten-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-memcached": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-mention-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-mongodb": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-timeline-mongodb": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-timeline-redis": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "user-timeline-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "write-home-timeline-rabbitmq": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "write-home-timeline-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "write-user-timeline-rabbitmq": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         },
         "write-user-timeline-service": {
-            "cpus": 1,
-            "max_cpus": 1,
+            "cpus": 4,
+            "max_cpus": 4,
             "max_replica": 1,
             "replica": 1
         }
