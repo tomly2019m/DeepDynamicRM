@@ -271,7 +271,7 @@ class UCB_Bandit:
                 "type": "hold",
                 "value": 0
             },
-            # 恢复到上一次的分配
+            # 恢复到降低之前的有效分配
             {
                 "type": "recover",
                 "value": 0
@@ -290,9 +290,12 @@ class UCB_Bandit:
 
         self.last_allocate = self.allocate_dict  # 上一次的分配 用于recover动作
         self.config = self.setup_config()
+        self.last_action = {}
+        self.hold_count = 0
 
-        # 保存资源配置历史
+        # 保存资源配置历史，当发生降低动作时，记录下来 默认长度为10
         self.allocation_history = []
+        self.history_length = 10
 
         # 保存从部署配置文件中读取默认服务配置
         self.default_cpu_config: dict[str, dict[str, float]] = {}
@@ -363,15 +366,26 @@ class UCB_Bandit:
         """选择要拉动的臂（基于UCB公式）"""
         ucb_values = np.zeros(self.k)
         # 在没超出slo之前 一直使用decrease策略
-        arm_list = [1, 3, 5]
+        arm_list = []
+        decrease = [1, 3, 5]
+        increase = [0, 2, 4, 6, 7]
+        increase_no_recover = [0, 2, 4, 6]
+        hold = [6]
 
         latency = latency[-2]  # P99延迟
 
-        if latency > 500:
-            raw_list = [i for i in range(self.k)]
-            reslut = [x for x in raw_list if x not in arm_list]
-            arm_list = reslut
-            print(arm_list)
+        if self.hold_count > 0:
+            if latency > 500:
+                arm_list = increase_no_recover
+            else:
+                arm_list = hold
+            self.hold_count -= 1
+        else:
+            if latency > 500:
+                arm_list = increase
+                self.hold_count = 5
+            else:
+                arm_list = decrease
 
         for arm in arm_list:
             if self.counts[arm] == 0:  # 未尝试过的臂优先选择
@@ -412,7 +426,7 @@ class UCB_Bandit:
         latency = latency[-2]  # P99延迟
 
         # 获取配置中的最大CPU数
-        max_cpu = self.config.get("max_cpu", 100)  # 默认值为100，如果配置文件中没有该项
+        max_cpu = self.config.get("max_cpu", 270)  # 默认值为100，如果配置文件中没有该项
 
         cpu_reward, latency_reward = 0, 0
         # 计算CPU奖励（映射：0->max_cpu 映射到 1->0）
@@ -448,12 +462,12 @@ class UCB_Bandit:
         new_allocation -- 新的资源分配字典
         """
         action = self.actions[chosen_arm]
-        action_type = action["type"]
+        action_type: str = action["type"]
         action_value = action["value"]
 
         # 保存当前状态到历史记录（用于recover）
         self.allocation_history.append(deepcopy(self.allocate_dict))
-        if len(self.allocation_history) > 10:  # 保留最近10次记录
+        if len(self.allocation_history) > self.history_length:  # 保留最近10次记录
             self.allocation_history.pop(0)
 
         # 计算所有服务的负载水平（利用率 / 分配资源）
@@ -486,6 +500,10 @@ class UCB_Bandit:
                     0.2 * self.replica_dict[target_service],  # 保持最小分配量
                     new_allocation[target_service] - action_value,
                 )
+                # 记录降低之前的配置信息
+                # self.allocation_history.append(deepcopy(self.allocate_dict))
+                # if len(self.allocation_history) > self.history_length:
+                #     self.allocation_history.pop(0)
 
         elif action_type == "increase_batch":
             # 增加前所有可调服务的CPU配额
@@ -497,11 +515,20 @@ class UCB_Bandit:
                 )
 
         elif action_type == "decrease_batch":
-            candidates = self.scalable_service
-            for service in candidates:
-                new_allocation[service] = max(
-                    0.2 * self.replica_dict[service],
-                    new_allocation[service] - action["value"])
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                0.2 * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 0.2
+            ]
+
+            if len(candidates) > 0:
+                for service in candidates:
+                    new_allocation[service] = max(
+                        0.2 * self.replica_dict[service],
+                        new_allocation[service] - action["value"])
+
+                # self.allocation_history.append(deepcopy(self.allocate_dict))
+                # if len(self.allocation_history) > self.history_length:
+                #     self.allocation_history.pop(0)
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
@@ -524,6 +551,10 @@ class UCB_Bandit:
                     0.2 * self.replica_dict[target_service],
                     new_allocation[target_service] * (1 - action["value"]))
 
+                # self.allocation_history.append(deepcopy(self.allocate_dict))
+                # if len(self.allocation_history) > self.history_length:
+                #     self.allocation_history.pop(0)
+
         elif action_type == "reset":
             # 重置到初始配置
             new_allocation = deepcopy(self.initial_allocation)
@@ -533,10 +564,9 @@ class UCB_Bandit:
             pass
 
         elif action_type == "recover":
-            # 恢复到上一次有效分配
-            if len(self.allocation_history) >= 2:
-                new_allocation = deepcopy(self.allocation_history[-2])
-                self.allocation_history.pop(-1)  # 移除当前无效记录
+            # 恢复到self.history_length之前有效分配
+            if len(self.allocation_history) == self.history_length:
+                new_allocation = deepcopy(self.allocation_history[0])
 
         # 验证分配有效性
         for service in new_allocation:
@@ -550,5 +580,4 @@ class UCB_Bandit:
         self.last_allocate = deepcopy(self.allocate_dict)
         self.allocate_dict = deepcopy(new_allocation)
 
-        # 配置转化 原本配置 代表一个服务总的cpu分配 转化为每replica的cpu分配
         return new_allocation

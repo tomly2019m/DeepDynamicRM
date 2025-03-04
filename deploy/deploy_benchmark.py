@@ -40,7 +40,7 @@ username = args.username
 docker_compose_file = args.docker_compose
 benchmark_config = args.benchmark_config
 
-benchmark_name = ""
+benchmark_name = args.benchmark_name
 
 
 # 加载配置文件
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     # test_dissolve()
     # test_setup()
     # deploy_benchmark()
-
+    docker_stack_rm(benchmark_name)
     dissolve_cluster()
     init_master()
     setup_swarm_cluster()

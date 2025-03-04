@@ -13,6 +13,7 @@ from MAB import UCB_Bandit
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
+sys.path.append(f"{PROJECT_ROOT}/deploy")
 
 from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
@@ -97,7 +98,7 @@ class SlaveConnection:
             print(f"Connection to {self.slave_host}:{self.slave_port} closed.")
 
 
-async def start_experiment(slaves):
+async def start_experiment(slaves, users: int):
     global exp_time, gathered_list, replicas, service_replicas
     connections: Dict[Tuple[str, int], SlaveConnection] = {}
     tasks = []
@@ -121,12 +122,12 @@ async def start_experiment(slaves):
         "--host",  # 参数：目标主机
         "http://127.0.0.1:8080",
         "--users",  # 用户数参数
-        "50",
+        f"{users}",
         "--csv",  # 输出CSV文件
         f"{PROJECT_ROOT}/mylocust/locust_log",
         "--headless",  # 无头模式
         "-t",  # 测试时长
-        f"{10 * exp_time}s",  # 100秒运行时间
+        f"{10 * exp_time}s",
     ]
 
     print(f"locust command:{locust_cmd}")
@@ -246,7 +247,7 @@ async def start_experiment(slaves):
             print(f"数据存储耗时: {store_time:.3f}秒")
 
             total_time = time.time() - start_time
-            print(f"时: {total_time:.3f}秒")
+            print(f"总时间: {total_time:.3f}秒")
             print("-" * 50)
 
             time.sleep(1)
@@ -330,7 +331,13 @@ async def main():
     setup_slave()
     # 等待slave监听进程启动完成
     time.sleep(5)
-    await start_experiment(slaves)
+    for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
+        # 重置实验环境
+        command = ("cd ~/DeepDynamicRM/deploy && "
+                   "~/miniconda3/envs/DDRM/bin/python3 "
+                   "deploy_benchmark.py")
+        execute_command(command, stream_output=True)
+        await start_experiment(slaves, users)
     if save:
         save_data(gathered_list, replicas)
 
