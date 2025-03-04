@@ -1,7 +1,9 @@
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import os
+import subprocess
 import time
 
 import sys
@@ -9,7 +11,7 @@ import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
-from monitor.shell import execute_command
+from monitor.shell import execute_command, execute_command_async
 from deploy.util.parser import parse_service_name
 
 running_container_list = []
@@ -450,14 +452,28 @@ def init_collector():
 
 # 配置cpu限制 输入参数是一个字典，key是service name value是cpu limit的具体值 已经经过处理 转化为每个副本的cpu limit
 def set_cpu_limit(cpu_limit: dict[str, int]):
+    """并行设置容器CPU限制（无阻塞等待）"""
     global service_container, scalable_service
-    for service, limit in cpu_limit.items():
-        if service in scalable_service:
-            for container_name in service_container[service]:
-                command = f"docker update --cpus={limit} {container_name}"
-                _, err = execute_command(command)
-                if err:
-                    print(f"设置cpu limit 出错{err}")
+    
+    # 生成所有需要执行的命令列表
+    commands = [
+        f"docker update --cpus={limit} {container_name}"
+        for service, limit in cpu_limit.items()
+        if service in scalable_service
+        for container_name in service_container[service]
+    ]
+    
+    # 使用线程池并行执行（根据CPU核心数动态调整工作线程）
+    with ThreadPoolExecutor(max_workers=min(32, len(commands))) as executor:
+        for cmd in commands:
+            # 提交任务到线程池（不等待结果）
+            executor.submit(
+                subprocess.run, 
+                cmd, 
+                shell=True, 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
 
 
 def test_to_numpy():

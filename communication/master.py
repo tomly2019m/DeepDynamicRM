@@ -16,11 +16,12 @@ sys.path.append(PROJECT_ROOT)
 
 from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
+from deploy.util.ssh import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time",
                     type=int,
-                    default=300,
+                    default=500,
                     help="experiment time")
 parser.add_argument("--username",
                     type=str,
@@ -52,6 +53,25 @@ class SlaveConnection:
         self.socket.connect((self.slave_host, self.slave_port))
         print(f"Connected to slave at {self.slave_host}:{self.slave_port}")
 
+    def send_command_sync(self, command) -> str:
+        if self.socket:
+            # 添加结束标记
+            command = f"{command}\r\n\r\n"
+            self.socket.sendall(command.encode())
+            data = b""
+            while True:
+                chunk = self.socket.recv(20480)
+                # 连接关闭时退出
+                data += chunk
+                # 检测服务端的结束符
+                if data.endswith(b"\r\n\r\n"):
+                    # 去除结束符并解码
+                    data = data[:-4]
+                    break
+            # print(f'Received from {self.slave_host}:{self.slave_port}:',
+            #       data.decode())
+            return data.decode()
+
     async def send_command(self, command) -> str:
         if self.socket:
             # 添加结束标记
@@ -61,8 +81,6 @@ class SlaveConnection:
             while True:
                 chunk = self.socket.recv(20480)
                 # 连接关闭时退出
-                if not chunk:
-                    break
                 data += chunk
                 # 检测服务端的结束符
                 if data.endswith(b"\r\n\r\n"):
@@ -108,7 +126,7 @@ async def start_experiment(slaves):
         f"{PROJECT_ROOT}/mylocust/locust_log",
         "--headless",  # 无头模式
         "-t",  # 测试时长
-        f"{exp_time + 100}s",  # 100秒运行时间
+        f"{10 * exp_time}s",  # 100秒运行时间
     ]
 
     print(f"locust command:{locust_cmd}")
@@ -133,17 +151,15 @@ async def start_experiment(slaves):
     time.sleep(5)
 
     current_exp_time = 0
+    start_time = time.time()
     try:
         while True:
+            # 数据采集阶段
+            collect_start = time.time()
             gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
-            # 遍历所有slave连接，发送collect命令采集数据
             tasks.clear()
             for connection in connections.values():
-                tasks.append(
-                    asyncio.create_task(connection.send_command("collect")))
-            results = await asyncio.gather(*tasks)
-            # s = time.time()
-            for result in results:
+                result = connection.send_command_sync("collect")
                 data_dict = json.loads(result)
                 gathered["cpu"] = concat_data(gathered["cpu"],
                                               data_dict["cpu"])
@@ -152,7 +168,26 @@ async def start_experiment(slaves):
                 gathered["io"] = concat_data(gathered["io"], data_dict["io"])
                 gathered["network"] = concat_data(gathered["network"],
                                                   data_dict["network"])
-            if len(replicas):
+            print(f"同步采集耗时：{time.time() - collect_start}")
+
+            # for connection in connections.values():
+            #     tasks.append(
+            #         asyncio.create_task(connection.send_command("collect")))
+            # results = await asyncio.gather(*tasks)
+            # for result in results:
+            #     data_dict = json.loads(result)
+            #     gathered["cpu"] = concat_data(gathered["cpu"],
+            #                                   data_dict["cpu"])
+            #     gathered["memory"] = concat_data(gathered["memory"],
+            #                                      data_dict["memory"])
+            #     gathered["io"] = concat_data(gathered["io"], data_dict["io"])
+            #     gathered["network"] = concat_data(gathered["network"],
+            #                                       data_dict["network"])
+            # collect_time = time.time() - collect_start
+            # print(f"数据采集耗时: {collect_time:.3f}秒")
+
+            # 副本初始化阶段
+            if len(replicas) == 0:
                 replicas = np.array([
                     len(cpu_list) for cpu_list in gathered["cpu"].values()
                 ]).flatten()
@@ -161,9 +196,10 @@ async def start_experiment(slaves):
                     for key, cpu_list in gathered["cpu"].items()
                 }
 
-            # print(replicas)
             print(f"当前实验进度: {current_exp_time}/{args.exp_time}")
-            print(gathered)
+
+            # 数据处理阶段
+            process_start = time.time()
             for k, v in gathered["cpu"].items():
                 gathered["cpu"][k] = [item / 1e6 for item in v]
 
@@ -171,42 +207,51 @@ async def start_experiment(slaves):
             gathered["memory"] = process_data(gathered["memory"])
             gathered["io"] = process_data(gathered["io"])
             gathered["network"] = process_data(gathered["network"])
+            process_time = time.time() - process_start
+            print(f"数据处理耗时: {process_time:.3f}秒")
 
+            # MAB决策阶段
+            mab_start = time.time()
             latency = get_latest_latency()
             print(f"当前延迟{latency}")
             arm_id = mab.select_arm(latency=latency)
             print(f"选择动作{arm_id}, {mab.actions[arm_id]}")
-            # print(gathered["cpu"])
             new_allocate = mab.execute_action(arm_id, gathered["cpu"])
             print(f"新的分配方案：{new_allocate}")
             print(f"总CPU分配数量：{sum(new_allocate.values())}")
+            mab_time = time.time() - mab_start
+            print(f"MAB决策耗时: {mab_time:.3f}秒")
 
+            # 配置更新阶段
+            update_start = time.time()
             print(f"更新cpu配置....")
-            # 转化为每副本的配置
             for service in new_allocate:
                 new_allocate[service] /= service_replicas[service]
             tasks.clear()
-            # 异步发送给每个slave 执行set limit
             for connection in connections.values():
-                tasks.append(
-                    asyncio.create_task(
-                        connection.send_command(
-                            f"update{json.dumps(new_allocate)}")))
-            results = await asyncio.gather(*tasks)
+                connection.send_command_sync(
+                    f"update{json.dumps(new_allocate)}")
 
             reward = mab.calculate_reward(latency)
             mab.update(arm_id, reward)
+            update_time = time.time() - update_start
+            print(f"配置更新耗时: {update_time:.3f}秒")
 
+            # 数据存储阶段
+            store_start = time.time()
             gathered = transform_data(gathered)
-            # print(time.time() - s)
-            gathered_list.append(gathered)  # 将处理后的 gathered 数据存储到列表中
+            gathered_list.append(gathered)
             latency_list.append(latency)
-            time.sleep(1)
-            exp_time -= 1
-            current_exp_time += 1
+            store_time = time.time() - store_start
+            print(f"数据存储耗时: {store_time:.3f}秒")
 
-            # 实验结束
-            if exp_time == 0:
+            total_time = time.time() - start_time
+            print(f"时: {total_time:.3f}秒")
+            print("-" * 50)
+
+            time.sleep(1)
+            current_exp_time += 1
+            if current_exp_time == exp_time:
                 break
     finally:
         # 清理locust进程
@@ -228,28 +273,21 @@ def setup_slave():
     # 在每个slave节点上启动监听服务
     for host in hosts:
         # 通过SSH连接到slave节点
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            ssh.connect(host, username=username)
-            # 先切换到目标目录在slave节点上启动监听程序
 
-            # 清理旧的进程
-            command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
-            stdin, stdout, stderr = ssh.exec_command(command)
+        # 清理旧的进程
+        command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
+        execute_command_via_system_ssh(host, username, command)
 
-            command = ("cd ~/DeepDynamicRM/communication && "
-                       "nohup ~/miniconda3/envs/DDRM/bin/python3 "
-                       f"slave.py --port {port} > /dev/null 2>&1 &")
+        command = ("cd ~/DeepDynamicRM/communication && "
+                   "nohup ~/miniconda3/envs/DDRM/bin/python3 "
+                   f"slave.py --port {port} > /dev/null 2>&1 &")
 
-            stdin, stdout, stderr = ssh.exec_command(command)
+        execute_command_via_system_ssh(host,
+                                       username,
+                                       command,
+                                       async_exec=True)
 
-            print(f"在 {host} 上启动监听服务,端口:{port}")
-
-        except Exception as e:
-            print(f"连接到 {host} 失败: {str(e)}")
-        finally:
-            ssh.close()
+        print(f"在 {host} 上启动监听服务,端口:{port}")
 
 
 def save_data(gathered_list, replicas):

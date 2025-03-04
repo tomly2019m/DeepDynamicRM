@@ -363,12 +363,15 @@ class UCB_Bandit:
         """选择要拉动的臂（基于UCB公式）"""
         ucb_values = np.zeros(self.k)
         # 在没超出slo之前 一直使用decrease策略
-        arm_list = [1, 3, 5, 6]
+        arm_list = [1, 3, 5]
 
         latency = latency[-2]  # P99延迟
 
         if latency > 500:
-            arm_list = [i for i in range(self.k)]
+            raw_list = [i for i in range(self.k)]
+            reslut = [x for x in raw_list if x not in arm_list]
+            arm_list = reslut
+            print(arm_list)
 
         for arm in arm_list:
             if self.counts[arm] == 0:  # 未尝试过的臂优先选择
@@ -477,13 +480,12 @@ class UCB_Bandit:
                 service for service in load if self.allocate_dict[service] -
                 0.2 * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 0.2
             ]
-            print(candidates)
-
-            target_service = min(candidates, key=lambda k: load[k])
-            new_allocation[target_service] = max(
-                0.2 * self.replica_dict[target_service],  # 保持最小分配量
-                new_allocation[target_service] - action_value,
-            )
+            if len(candidates) > 0:
+                target_service = min(candidates, key=lambda k: load[k])
+                new_allocation[target_service] = max(
+                    0.2 * self.replica_dict[target_service],  # 保持最小分配量
+                    new_allocation[target_service] - action_value,
+                )
 
         elif action_type == "increase_batch":
             # 增加前所有可调服务的CPU配额
@@ -514,13 +516,13 @@ class UCB_Bandit:
             # 过滤掉 allocate 值为 0.2 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                0.2 > 1e-4  # 检查 allocate 值是否为 0.2
+                0.2 * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 0.2
             ]
-
-            target_service = min(candidates, key=lambda k: load[k])
-            new_allocation[target_service] = max(
-                0.2 * self.replica_dict[target_service],
-                new_allocation[target_service] * (1 - action["value"]))
+            if len(candidates) > 0:
+                target_service = min(candidates, key=lambda k: load[k])
+                new_allocation[target_service] = max(
+                    0.2 * self.replica_dict[target_service],
+                    new_allocation[target_service] * (1 - action["value"]))
 
         elif action_type == "reset":
             # 重置到初始配置
@@ -538,14 +540,15 @@ class UCB_Bandit:
 
         # 验证分配有效性
         for service in new_allocation:
-            if new_allocation[service] < 0.2 * self.replica_dict[service]:  # 资源分配下限保护
+            if new_allocation[
+                    service] < 0.2 * self.replica_dict[service]:  # 资源分配下限保护
                 new_allocation[service] = 0.2 * self.replica_dict[service]
 
         # set_cpu_limit(new_allocation, self.replica_dict)
 
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)
-        self.allocate_dict = new_allocation
+        self.allocate_dict = deepcopy(new_allocation)
 
         # 配置转化 原本配置 代表一个服务总的cpu分配 转化为每replica的cpu分配
         return new_allocation

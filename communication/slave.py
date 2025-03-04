@@ -41,6 +41,7 @@ def handle_command(command: str):
         command = command.replace("update", "")
         allocate_dict = json.loads(command)
         set_cpu_limit(allocate_dict)
+        response = "set cpu limit success"
     return response
 
 
@@ -71,6 +72,7 @@ def slave_listen(master_host, master_port):
                 result = handle_command(command)
 
                 if result == "stop" or not result:
+                    conn.sendall("empty response!\r\n\r\n".encode())
                     break
                 # 返回结果，添加结束符
                 result = f"{result}\r\n\r\n"
