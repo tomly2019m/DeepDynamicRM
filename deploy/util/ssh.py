@@ -13,7 +13,7 @@ def setup_ssh_multiplexing(host: str, username: str):
     if not os.path.exists(control_path):
         # 建立主连接，添加更多控制选项
         ssh_command = (
-            f"ssh -fNM "
+            f"ssh -q -fNM "
             f"-o ControlMaster=yes "
             f"-o ControlPath={control_path} "
             f"-o ControlPersist=1h "  # 空闲连接保持1小时

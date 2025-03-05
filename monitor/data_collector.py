@@ -1,13 +1,16 @@
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import json
 import math
 import os
 import subprocess
 import time
-
+import shlex
 import sys
+from typing import List
 import numpy as np
+import docker
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -51,6 +54,8 @@ collect_interval = 1
 
 benchmark_name = "socialnetwork"
 
+client = docker.from_env()
+
 
 def load_services():
     global services, service_container, container_name_id, container_id_pid, scalable_service
@@ -58,7 +63,7 @@ def load_services():
         config = json.load(f)
         # 从配置文件中获取所有服务名
         service_dict = config["service"]
-        services = list(service_dict.keys())
+        services = config["service_list"]
         scalable_service = config["scalable_service"]
         # 初始化service_container
         service_container = {service: [] for service in services}
@@ -89,6 +94,120 @@ def set_running_container_list():
                 service_container[service_name].append(container_name)
 
 
+def set_running_container_list_via_docker_api():
+    """使用Docker API高效获取容器列表，保持原有数据结构"""
+    global running_container_list, service_container, services, benchmark_name, client
+
+    # 清空全局容器列表
+    running_container_list = []
+    service_container = {s: [] for s in services}  # 保持原有结构
+
+    try:
+        containers = client.containers.list(filters={"status": "running"})
+
+        # 防御性编程：添加空值检查
+        valid_containers = [
+            c for c in containers if getattr(c, 'name', None) is not None
+        ]
+        invalid_count = len(containers) - len(valid_containers)
+        if invalid_count > 0:
+            print(f"警告：发现{invalid_count}个无名容器，已自动过滤")
+
+        # 提取容器信息
+        for container in containers:
+            try:
+                # 处理名称格式（兼容Docker不同版本）
+                raw_name = container.name
+                container_name = raw_name.lstrip(
+                    '/') if raw_name else f"unnamed_{container.id[:12]}"
+
+                # 过滤逻辑（增加异常捕获）
+                if benchmark_name in container_name:
+                    running_container_list.append(container_name)
+
+                    # 服务名称解析（防止解析异常）
+                    service_name = parse_service_name(
+                        container_name) if container_name else "unknown"
+                    if service_name in service_container:
+                        service_container[service_name].append(container_name)
+                    else:
+                        print(f"未注册服务：{service_name} 容器：{container_name}")
+
+            except Exception as e:
+                print(f"处理容器{container.id}时发生异常：{str(e)}")
+                continue
+
+        # print(f"成功获取{len(running_container_list)}个运行容器")
+
+    except docker.errors.APIError as e:
+        print(f"Docker API请求失败：{e.explanation}")
+    except Exception as e:
+        print(f"未知错误：{str(e)}")
+
+
+def set_running_container_list_subprocess() -> None:
+    """使用subprocess高效获取容器列表，兼容原有全局变量"""
+    global running_container_list, service_container, services, benchmark_name
+
+    # 清空全局容器列表
+    running_container_list = []
+    service_container = {s: [] for s in services}
+
+    try:
+        # 构建安全命令 (使用格式化输出减少解析复杂度)
+        cmd = shlex.split("docker ps --filter 'status=running' "
+                          "--format '{{.ID}}|{{.Names}}' --no-trunc")
+
+        # 执行命令并捕获输出
+        result = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5  # 设置超时防止卡死
+        )
+
+        # 解析输出
+        containers: List[str] = result.stdout.splitlines()
+        if not containers:
+            print("没有运行中的容器")
+            return
+
+        # 处理每行数据
+        for line in containers:
+            # 安全分割字段
+            if '|' not in line:
+                print(f"异常数据行: {line}")
+                continue
+
+            cid, raw_name = line.split('|', 1)
+            container_name = raw_name.strip()
+
+            # 空名称处理
+            if not container_name:
+                container_name = f"unnamed_{cid[:12]}"
+
+            # 应用过滤逻辑
+            if benchmark_name in container_name:
+                running_container_list.append(container_name)
+
+                # 服务分类
+                service_name = parse_service_name(container_name)
+                if service_name in service_container:
+                    service_container[service_name].append(container_name)
+
+        print(f"成功获取 {len(running_container_list)} 个容器")
+
+    except subprocess.CalledProcessError as e:
+        error_msg = f"命令执行失败: {e.stderr.strip()}" if e.stderr else "未知错误"
+        raise RuntimeError(f"{error_msg}\n命令: {e.cmd}") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("容器列表获取超时(5秒)")
+    except Exception as e:
+        raise RuntimeError(f"未知错误: {str(e)}") from e
+
+
 # 依据容器名获取容器id
 def get_container_id(container_name: str) -> str:
     command = f"docker inspect -f '{{{{.Id}}}}' {container_name}"
@@ -98,12 +217,59 @@ def get_container_id(container_name: str) -> str:
     return result.strip()
 
 
+def get_container_id_subprocess(container_name: str) -> str:
+    """
+    安全获取容器完整ID
+    :param container_name: 容器名称/ID
+    :return: 64位完整容器ID
+    :raises ContainerNotFoundError: 当容器不存在时
+    :raises RuntimeError: 其他执行错误
+    """
+    try:
+        # 安全构造命令（避免注入攻击）
+        cmd = shlex.split(
+            f"docker inspect -f '{{{{.Id}}}}' {shlex.quote(container_name)}")
+
+        # 执行命令（带超时控制）
+        result = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5  # 超时时间可根据需求调整
+        )
+
+        # 清理输出（处理可能的换行符）
+        container_id = result.stdout.strip()
+
+        if not container_id:
+            raise
+
+        return container_id
+
+    except subprocess.CalledProcessError as e:
+        # 分析错误类型
+        if "No such object" in e.stderr:
+            raise
+        elif "Permission denied" in e.stderr:
+            raise RuntimeError("Docker权限不足，请检查用户组权限") from e
+        else:
+            raise RuntimeError(f"命令执行失败: {e.stderr.strip() or '未知错误'}") from e
+
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"获取容器ID超时，容器: {container_name}") from e
+
+    except FileNotFoundError:
+        raise RuntimeError("Docker CLI 未安装或不在PATH中") from None
+
+
 # 获取容器id
 def set_container_name_id():
     global container_name_id, service_container
     for container_list in service_container.values():
         for container_name in container_list:
-            container_id = get_container_id(container_name)
+            container_id = get_container_id_subprocess(container_name)
             container_name_id[container_name] = container_id
 
 
@@ -116,13 +282,63 @@ def get_container_pid(container_id: str) -> str:
     return result.strip()
 
 
+def get_container_pid_subprocess(container_id: str) -> int:
+    """
+    安全获取容器PID
+    :param container_id: 容器完整ID
+    :return: 容器进程PID
+    :raises ContainerNotFoundError: 容器不存在时
+    :raises ContainerNotRunningError: 容器未运行时
+    :raises InvalidPIDError: PID无效时
+    """
+    try:
+        # 安全构造命令（处理特殊字符）
+        cmd = shlex.split(
+            f"docker inspect --format '{{{{.State.Pid}}}}' {shlex.quote(container_id)}"
+        )
+
+        # 执行命令（带超时控制）
+        result = subprocess.run(cmd,
+                                check=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                timeout=5)
+
+        # 提取并验证PID
+        pid_str = result.stdout.strip()
+        if not pid_str.isdigit():
+            raise
+
+        pid = int(pid_str)
+        if pid <= 0:
+            raise
+
+        return pid
+
+    except subprocess.CalledProcessError as e:
+        # 分析错误类型
+        if "No such container" in e.stderr:
+            raise
+        elif "is not running" in e.stderr:
+            raise
+        else:
+            raise RuntimeError(f"命令执行失败: {e.stderr.strip() or '未知错误'}") from e
+
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"获取PID超时，容器: {container_id}") from e
+
+    except ValueError:
+        raise
+
+
 # 配置容器pid
 def set_container_pids():
     global container_id_pid, container_name_id, service_container
     for container_list in service_container.values():
         for container_name in container_list:
             container_id = container_name_id[container_name]
-            container_pid = get_container_pid(container_id)
+            container_pid = get_container_pid_subprocess(container_id)
             container_id_pid[container_id] = container_pid
 
 
@@ -147,6 +363,8 @@ def get_container_cpu_usage():
                 container_id = container_name_id[container_name]
                 assert cgroup_version == "v2"
                 pseudo_file = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope/cpu.stat"
+                if not os.path.exists(pseudo_file):
+                    raise FileNotFoundError(f"文件不存在: {pseudo_file}")
                 # print(pseudo_file)
                 with open(pseudo_file, "r") as f:
                     line = f.readline()
@@ -390,7 +608,7 @@ def transform_data(gathered_data):
     ])
 
     # 获取所有服务并保持顺序一致
-    all_services = list(gathered_data['cpu'].keys())
+    all_services = services
 
     # 初始化结果数组 (service_num, metric_num, 4)
     service_num = len(all_services)
@@ -425,7 +643,14 @@ def transform_data(gathered_data):
 # 初始化数据采集器
 def init_collector():
     load_services()
-    set_running_container_list()
+    set_running_container_list_via_docker_api()
+    set_container_name_id()
+    set_container_pids()
+
+
+# 定期更新全局变量
+def flush():
+    set_running_container_list_via_docker_api()
     set_container_name_id()
     set_container_pids()
 
@@ -454,26 +679,23 @@ def init_collector():
 def set_cpu_limit(cpu_limit: dict[str, int]):
     """并行设置容器CPU限制（无阻塞等待）"""
     global service_container, scalable_service
-    
+
     # 生成所有需要执行的命令列表
     commands = [
         f"docker update --cpus={limit} {container_name}"
-        for service, limit in cpu_limit.items()
-        if service in scalable_service
+        for service, limit in cpu_limit.items() if service in scalable_service
         for container_name in service_container[service]
     ]
-    
+
     # 使用线程池并行执行（根据CPU核心数动态调整工作线程）
     with ThreadPoolExecutor(max_workers=min(32, len(commands))) as executor:
         for cmd in commands:
             # 提交任务到线程池（不等待结果）
-            executor.submit(
-                subprocess.run, 
-                cmd, 
-                shell=True, 
-                stdout=subprocess.DEVNULL, 
-                stderr=subprocess.DEVNULL
-            )
+            executor.submit(subprocess.run,
+                            cmd,
+                            shell=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
 
 
 def test_to_numpy():
@@ -547,5 +769,14 @@ def test_get_io_usage():
     print(get_io_usage())
 
 
+def testflush():
+    init_collector()
+    s = time.time()
+    for i in range(10):
+        flush()
+        print(service_container)
+    print(f"{time.time() - s}")
+
+
 if __name__ == "__main__":
-    test_get_container_cpu_usage()
+    testflush()

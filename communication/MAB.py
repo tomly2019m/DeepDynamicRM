@@ -383,7 +383,7 @@ class UCB_Bandit:
         else:
             if latency > 500:
                 arm_list = increase
-                self.hold_count = 5
+                self.hold_count = 10
             else:
                 arm_list = decrease
 

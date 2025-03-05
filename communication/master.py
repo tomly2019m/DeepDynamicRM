@@ -1,5 +1,6 @@
 import argparse
 from asyncio import subprocess
+from copy import deepcopy
 import json
 import os
 import socket
@@ -22,7 +23,7 @@ from deploy.util.ssh import *
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time",
                     type=int,
-                    default=500,
+                    default=2000,
                     help="experiment time")
 parser.add_argument("--username",
                     type=str,
@@ -40,6 +41,12 @@ gathered_list = []  # 用于存储每次循环处理后的 gathered 数据
 replicas = []
 service_replicas = {}
 latency_list = []
+cpu_config_list = []
+services = []
+
+with open(f"{PROJECT_ROOT}/deploy/config/socialnetwork.json", 'r') as f:
+    config = json.load(f)
+    services = config["service_list"]
 
 
 class SlaveConnection:
@@ -52,6 +59,8 @@ class SlaveConnection:
     async def connect(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((self.slave_host, self.slave_port))
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE,
+                               1)  # 开启TCP保活
         print(f"Connected to slave at {self.slave_host}:{self.slave_port}")
 
     def send_command_sync(self, command) -> str:
@@ -59,38 +68,41 @@ class SlaveConnection:
             # 添加结束标记
             command = f"{command}\r\n\r\n"
             self.socket.sendall(command.encode())
-            data = b""
+            data = ""
             while True:
-                chunk = self.socket.recv(20480)
+                chunk = self.socket.recv(1024)
                 # 连接关闭时退出
-                data += chunk
+                if not chunk:
+                    print("connection closed")
+                    break
+                data += chunk.decode()
                 # 检测服务端的结束符
-                if data.endswith(b"\r\n\r\n"):
+                if "\r\n\r\n" in data:
                     # 去除结束符并解码
-                    data = data[:-4]
+                    data = data.split("\r\n\r\n")[0]
                     break
             # print(f'Received from {self.slave_host}:{self.slave_port}:',
             #       data.decode())
-            return data.decode()
+            return data
 
-    async def send_command(self, command) -> str:
-        if self.socket:
-            # 添加结束标记
-            command = f"{command}\r\n\r\n"
-            self.socket.sendall(command.encode())
-            data = b""
-            while True:
-                chunk = self.socket.recv(20480)
-                # 连接关闭时退出
-                data += chunk
-                # 检测服务端的结束符
-                if data.endswith(b"\r\n\r\n"):
-                    # 去除结束符并解码
-                    data = data[:-4]
-                    break
-            # print(f'Received from {self.slave_host}:{self.slave_port}:',
-            #       data.decode())
-            return data.decode()
+    # async def send_command(self, command) -> str:
+    #     if self.socket:
+    #         # 添加结束标记
+    #         command = f"{command}\r\n\r\n"
+    #         self.socket.sendall(command.encode())
+    #         data = b""
+    #         while True:
+    #             chunk = self.socket.recv(1024)
+    #             # 连接关闭时退出
+    #             data += chunk
+    #             # 检测服务端的结束符
+    #             if data.endswith(b"\r\n\r\n"):
+    #                 # 去除结束符并解码
+    #                 data = data[:-4]
+    #                 break
+    #         # print(f'Received from {self.slave_host}:{self.slave_port}:',
+    #         #       data.decode())
+    #         return data.decode()
 
     def close(self):
         if self.socket:
@@ -98,21 +110,11 @@ class SlaveConnection:
             print(f"Connection to {self.slave_host}:{self.slave_port} closed.")
 
 
-async def start_experiment(slaves, users: int):
-    global exp_time, gathered_list, replicas, service_replicas
-    connections: Dict[Tuple[str, int], SlaveConnection] = {}
+async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
+                           users: int):
+    global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
+
     tasks = []
-
-    # 建立与每个slave的连接
-    for slave_host, slave_port in slaves:
-        connection = SlaveConnection(slave_host, slave_port)
-        await connection.connect()
-        connections[(slave_host, slave_port)] = connection
-        tasks.append(asyncio.create_task(connection.send_command("init")))
-
-    # 等待所有 slave 初始化完毕
-    await asyncio.gather(*tasks)
-    tasks.clear()
 
     # 启动locust负载，同时使用MAB探索
     locust_cmd = [
@@ -127,7 +129,7 @@ async def start_experiment(slaves, users: int):
         f"{PROJECT_ROOT}/mylocust/locust_log",
         "--headless",  # 无头模式
         "-t",  # 测试时长
-        f"{10 * exp_time}s",
+        f"{2 * exp_time}s",
     ]
 
     print(f"locust command:{locust_cmd}")
@@ -149,7 +151,7 @@ async def start_experiment(slaves, users: int):
     mab = UCB_Bandit()
 
     # 等待负载稳定
-    time.sleep(5)
+    time.sleep(10)
 
     current_exp_time = 0
     start_time = time.time()
@@ -159,16 +161,27 @@ async def start_experiment(slaves, users: int):
             collect_start = time.time()
             gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
             tasks.clear()
-            for connection in connections.values():
-                result = connection.send_command_sync("collect")
-                data_dict = json.loads(result)
-                gathered["cpu"] = concat_data(gathered["cpu"],
-                                              data_dict["cpu"])
-                gathered["memory"] = concat_data(gathered["memory"],
-                                                 data_dict["memory"])
-                gathered["io"] = concat_data(gathered["io"], data_dict["io"])
-                gathered["network"] = concat_data(gathered["network"],
-                                                  data_dict["network"])
+            while True:
+                modify = False
+                for connection in connections.values():
+                    result = connection.send_command_sync("collect")
+                    if result == "modify":
+                        for connection in connections.values():
+                            connection.send_command_sync("flush")
+                        modify = True
+                        break
+                    data_dict = json.loads(result)
+                    gathered["cpu"] = concat_data(gathered["cpu"],
+                                                  data_dict["cpu"])
+                    gathered["memory"] = concat_data(gathered["memory"],
+                                                     data_dict["memory"])
+                    gathered["io"] = concat_data(gathered["io"],
+                                                 data_dict["io"])
+                    gathered["network"] = concat_data(gathered["network"],
+                                                      data_dict["network"])
+                if not modify:
+                    break
+
             print(f"同步采集耗时：{time.time() - collect_start}")
 
             # for connection in connections.values():
@@ -218,6 +231,7 @@ async def start_experiment(slaves, users: int):
             arm_id = mab.select_arm(latency=latency)
             print(f"选择动作{arm_id}, {mab.actions[arm_id]}")
             new_allocate = mab.execute_action(arm_id, gathered["cpu"])
+            stored_allocate = deepcopy(new_allocate)
             print(f"新的分配方案：{new_allocate}")
             print(f"总CPU分配数量：{sum(new_allocate.values())}")
             mab_time = time.time() - mab_start
@@ -243,6 +257,9 @@ async def start_experiment(slaves, users: int):
             gathered = transform_data(gathered)
             gathered_list.append(gathered)
             latency_list.append(latency)
+            # 保存cpu配置信息
+            cpu_config_list.append(
+                [stored_allocate[service] for service in services])
             store_time = time.time() - store_start
             print(f"数据存储耗时: {store_time:.3f}秒")
 
@@ -253,13 +270,12 @@ async def start_experiment(slaves, users: int):
             time.sleep(1)
             current_exp_time += 1
             if current_exp_time == exp_time:
+                _, _ = execute_command(f"sudo kill {process.pid}")
                 break
+
     finally:
         # 清理locust进程
         _, _ = execute_command(f"sudo kill {process.pid}")
-        # 关闭所有连接
-        for connection in connections.values():
-            connection.close()
 
 
 # 配置好slave，在slave上启动监听
@@ -277,16 +293,16 @@ def setup_slave():
 
         # 清理旧的进程
         command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
-        execute_command_via_system_ssh(host, username, command)
+        # execute_command_via_system_ssh(host, username, command)
 
         command = ("cd ~/DeepDynamicRM/communication && "
                    "nohup ~/miniconda3/envs/DDRM/bin/python3 "
-                   f"slave.py --port {port} > /dev/null 2>&1 &")
+                   f"slave.py --port {port}")
 
-        execute_command_via_system_ssh(host,
-                                       username,
-                                       command,
-                                       async_exec=True)
+        # execute_command_via_system_ssh(host,
+        #                                username,
+        #                                command,
+        #                                async_exec=True)
 
         print(f"在 {host} 上启动监听服务,端口:{port}")
 
@@ -312,6 +328,10 @@ def save_data(gathered_list, replicas):
     np.save(latency_path, latency_list)
     print(f"已保存latency数据到: {latency_path}")
 
+    cpu_config_path = f"./data/cpu_config.npy"
+    np.save(cpu_config_path, cpu_config_list)
+    print(f"已保存cpu_config_path数据到: {latency_path}")
+
 
 class Executor:
     pass
@@ -319,6 +339,7 @@ class Executor:
 
 async def main():
     global gathered_list, replicas
+    distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
     comm_config = ""
     with open("./comm.json", "r") as f:
@@ -327,19 +348,35 @@ async def main():
     port = comm_config["port"]
     slaves = [(host, port) for host in hosts]
 
-    distribute_project(username=username)
-    setup_slave()
-    # 等待slave监听进程启动完成
-    time.sleep(5)
+    connections: Dict[Tuple[str, int], SlaveConnection] = {}
+
+    command = ("cd ~/DeepDynamicRM/deploy && "
+               "~/miniconda3/envs/DDRM/bin/python3 "
+               "deploy_benchmark.py")
+    # execute_command(command, stream_output=True)
+
+    # 建立与每个slave的连接
+    for slave_host, slave_port in slaves:
+        connection = SlaveConnection(slave_host, slave_port)
+        await connection.connect()
+        connections[(slave_host, slave_port)] = connection
+        connection.send_command_sync("init")
+
     for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
+        # setup_slave()
+        # 等待slave监听进程启动完成
+        time.sleep(10)
         # 重置实验环境
-        command = ("cd ~/DeepDynamicRM/deploy && "
-                   "~/miniconda3/envs/DDRM/bin/python3 "
-                   "deploy_benchmark.py")
-        execute_command(command, stream_output=True)
-        await start_experiment(slaves, users)
+        # command = ("cd ~/DeepDynamicRM/deploy && "
+        #            "~/miniconda3/envs/DDRM/bin/python3 "
+        #            "deploy_benchmark.py")
+        # execute_command(command, stream_output=True)
+        await start_experiment(connections, users)
     if save:
         save_data(gathered_list, replicas)
+
+    for connection in connections.values():
+        connection.close()
 
 
 def test_setup_slave():

@@ -29,19 +29,30 @@ def handle_command(command: str):
         response = "Collector initialized"
 
     elif command == 'collect':
-        latest_data = {
-            "cpu": get_container_cpu_usage(),
-            "memory": get_memory_usage(),
-            "io": get_io_usage(),
-            "network": get_network_usage()
-        }
-        response = json.dumps(latest_data)
+        try:
+            latest_data = {
+                "cpu": get_container_cpu_usage(),
+                "memory": get_memory_usage(),
+                "io": get_io_usage(),
+                "network": get_network_usage()
+            }
+            response = json.dumps(latest_data)
+        except FileNotFoundError as e:
+            print("容器位置发生变化，执行flush, 通知master执行flush")
+            response = "modify"
+        except Exception as e:
+            print(f"异常{e}")
+            response = "unknown"
 
     elif "update" in command:
         command = command.replace("update", "")
         allocate_dict = json.loads(command)
         set_cpu_limit(allocate_dict)
         response = "set cpu limit success"
+
+    elif command == "flush":
+        flush()
+        response = "flush success"
     return response
 
 
@@ -57,17 +68,20 @@ def slave_listen(master_host, master_port):
         with conn:
             print(f'连接成功: {addr}')
             while True:
-                data = b''
+                data = ''
 
                 while True:
-                    chunk = conn.recv(20480)
-                    data += chunk
-                    if data.endswith(b"\r\n\r\n"):
+                    chunk = conn.recv(1024)
+                    if not chunk:
+                        print("connection closed")
+                        break
+                    data += chunk.decode()
+                    if "\r\n\r\n" in data:
                         # 去除结束符并解码
-                        data = data[:-4]
+                        data = data.split("\r\n\r\n")[0]
                         break
 
-                command = data.decode()
+                command = data
                 # 处理命令
                 result = handle_command(command)
 
