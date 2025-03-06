@@ -301,16 +301,16 @@ def setup_slave():
 
         # 清理旧的进程
         command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
-        # execute_command_via_system_ssh(host, username, command)
+        execute_command_via_system_ssh(host, username, command)
 
         command = ("cd ~/DeepDynamicRM/communication && "
                    "nohup ~/miniconda3/envs/DDRM/bin/python3 "
                    f"slave.py --port {port}")
 
-        # execute_command_via_system_ssh(host,
-        #                                username,
-        #                                command,
-        #                                async_exec=True)
+        execute_command_via_system_ssh(host,
+                                       username,
+                                       command,
+                                       async_exec=True)
 
         print(f"在 {host} 上启动监听服务,端口:{port}")
 
