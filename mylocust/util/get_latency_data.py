@@ -8,7 +8,8 @@ project_root = "~/DeepDynamicRM"
 log_path = f"{project_root}/mylocust/locust_log_stats_history.csv"
 
 # 定义需要提取的字段（对应CSV列名）
-percentile_columns = [
+percentile_and_rps_columns = [
+    'Requests/s',
     '90%',  # 第90百分位延迟
     '95%',  # 第95百分位延迟
     '98%',  # 第98百分位延迟
@@ -25,7 +26,7 @@ def get_latest_latency():
     last_row = df.iloc[-1]
 
     # 选择目标字段并转为numpy数组
-    latency_data = last_row[percentile_columns].astype(float).values
+    latency_data = last_row[percentile_and_rps_columns].astype(float).values
 
     return latency_data
 

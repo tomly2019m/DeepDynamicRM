@@ -1,4 +1,2 @@
 Method,Name,Error,Occurrences
-POST,compose_post,"ReadTimeout(ReadTimeoutError(""HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=10)""))",11
-POST,compose_post,HTTPError('400 Client Error: Bad Request for url: compose_post'),70
-POST,compose_post,HTTPError('500 Server Error: Internal Server Error for url: compose_post'),34
+POST,compose_post,HTTPError('400 Client Error: Bad Request for url: compose_post'),8

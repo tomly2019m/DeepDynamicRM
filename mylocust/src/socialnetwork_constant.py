@@ -149,7 +149,7 @@ def random_decimal(length):
 def compose_random_text():
     coin = random.random() * 100
     if coin <= 30.0:
-        length = random.randint(0, 50)
+        length = random.randint(10, 50)
     elif coin <= 58.2:
         length = random.randint(51, 100)
     elif coin <= 76.5:
@@ -181,7 +181,7 @@ def compose_random_user():
     return str(user)
 
 
-mean_iat = 0.1  # seconds
+mean_iat = 1  # seconds
 
 
 class SocialMediaUser(HttpUser):

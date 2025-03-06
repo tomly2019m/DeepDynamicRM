@@ -1,5 +1,15 @@
 {
-    "max_cpu" : 270,
-    "cpu_factor" : 1,
-    "latency_factor": 1
+    "max_cpu": 270,
+    "cpu_factor": 1,
+    "latency_factor": 1,
+    "key_service": "media-filter-service",
+    "50": 16,
+    "100": 30,
+    "150": 45,
+    "200": 60,
+    "250": 60,
+    "300": 60,
+    "350": 65,
+    "400": 65,
+    "450": 65
 }

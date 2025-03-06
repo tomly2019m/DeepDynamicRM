@@ -21,10 +21,7 @@ from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time",
-                    type=int,
-                    default=2000,
-                    help="experiment time")
+parser.add_argument("--exp_time", type=int, default=15, help="experiment time")
 parser.add_argument("--username",
                     type=str,
                     default="tomly",
@@ -111,7 +108,7 @@ class SlaveConnection:
 
 
 async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
-                           users: int):
+                           users: int, load_type: str, min_core):
     global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
 
     tasks = []
@@ -120,7 +117,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
     locust_cmd = [
         "locust",  # 命令名称
         "-f",  # 参数：指定locust文件路径
-        f"{PROJECT_ROOT}/mylocust/src/socialnetwork.py",  # 你的Locust文件路径
+        f"{PROJECT_ROOT}/mylocust/src/socialnetwork_{load_type}.py",  # 你的Locust文件路径
         "--host",  # 参数：目标主机
         "http://127.0.0.1:8080",
         "--users",  # 用户数参数
@@ -129,7 +126,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
         f"{PROJECT_ROOT}/mylocust/locust_log",
         "--headless",  # 无头模式
         "-t",  # 测试时长
-        f"{2 * exp_time}s",
+        f"{3 * exp_time}s",
     ]
 
     print(f"locust command:{locust_cmd}")
@@ -148,10 +145,18 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
         print(f"启动Locust失败: {str(e)}")
         raise
 
-    mab = UCB_Bandit()
+    mab = UCB_Bandit(min_core)
+    init_allocate = deepcopy(mab.get_init_allocate())
+
+    # 初始化配置
+    print("执行初始化配置...")
+    for service in init_allocate:
+        init_allocate[service] /= mab.replica_dict[service]
+    for connection in connections.values():
+        connection.send_command_sync(f"update{json.dumps(init_allocate)}")
 
     # 等待负载稳定
-    time.sleep(10)
+    time.sleep(30)
 
     current_exp_time = 0
     start_time = time.time()
@@ -167,6 +172,9 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
                     result = connection.send_command_sync("collect")
                     if result == "modify":
                         for connection in connections.values():
+                            # 确保容器状态稳定再flush
+                            print("等待容器状态稳定")
+                            time.sleep(5)
                             connection.send_command_sync("flush")
                         modify = True
                         break
@@ -344,15 +352,20 @@ async def main():
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
+
+    mab_config = ""
+    with open("./mab.json", "r") as f:
+        mab_config = json.load(f)
+
     hosts = comm_config["slaves"]
     port = comm_config["port"]
     slaves = [(host, port) for host in hosts]
 
     connections: Dict[Tuple[str, int], SlaveConnection] = {}
 
-    command = ("cd ~/DeepDynamicRM/deploy && "
-               "~/miniconda3/envs/DDRM/bin/python3 "
-               "deploy_benchmark.py")
+    # command = ("cd ~/DeepDynamicRM/deploy && "
+    #            "~/miniconda3/envs/DDRM/bin/python3 "
+    #            "deploy_benchmark.py")
     # execute_command(command, stream_output=True)
 
     # 建立与每个slave的连接
@@ -366,12 +379,15 @@ async def main():
         # setup_slave()
         # 等待slave监听进程启动完成
         time.sleep(10)
-        # 重置实验环境
-        # command = ("cd ~/DeepDynamicRM/deploy && "
-        #            "~/miniconda3/envs/DDRM/bin/python3 "
-        #            "deploy_benchmark.py")
-        # execute_command(command, stream_output=True)
-        await start_experiment(connections, users)
+        #重置实验环境
+        command = ("cd ~/DeepDynamicRM/deploy && "
+                   "~/miniconda3/envs/DDRM/bin/python3 "
+                   "deploy_benchmark.py")
+        execute_command(command, stream_output=True)
+
+        for load_type in ["constant", "daynight", "bursty", "noisy"]:
+            await start_experiment(connections, users, load_type,
+                                   mab_config[str(users)])
     if save:
         save_data(gathered_list, replicas)
 
