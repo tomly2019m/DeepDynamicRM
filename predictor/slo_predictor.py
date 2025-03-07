@@ -295,9 +295,9 @@ def process_data(window_size=30, pred_window=5, threshold=500, save_scalers=True
     np.random.shuffle(indices)  # 打乱索引顺序
 
     # 使用打乱后的索引重新排列所有数据
-    # X_serv_all = X_serv_all[indices]
-    # X_lat_all = X_lat_all[indices]
-    # y_all = y_all[indices]
+    X_serv_all = X_serv_all[indices]
+    X_lat_all = X_lat_all[indices]
+    y_all = y_all[indices]
 
     train_end = int(num_samples * 0.8)
     val_end = int(num_samples * 0.9)
@@ -325,7 +325,9 @@ def process_data(window_size=30, pred_window=5, threshold=500, save_scalers=True
         print(f"样本数: {len(labels)}")
         print(f"服务数据形状: {serv.shape}")
         print(f"延迟数据形状: {lat.shape}")
-        print(f"标签分布: 0={np.sum(labels==0)}, 1={np.sum(labels==1)}")
+        print(
+            f"标签分布: 0={np.sum(labels==0)}, 1={np.sum(labels==1)}, 2={np.sum(labels==2)}, 3={np.sum(labels==3)}, 4={np.sum(labels==4)}, 5={np.sum(labels==5)}"
+        )
 
     print_dataset_info("训练集", X_train_serv, X_train_lat, y_train)
     print_dataset_info("验证集", X_val_serv, X_val_lat, y_val)
@@ -364,8 +366,9 @@ class ServiceBranch(nn.Module):
 
         # 多尺度卷积网络
         self.conv_blocks = nn.ModuleList([
-            nn.Sequential(nn.Conv1d(feature_dim, conv_channels, kernel_size=k, padding=k // 2), nn.BatchNorm1d(conv_channels),
-                          nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i))) for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
+            nn.Sequential(nn.Conv1d(feature_dim, conv_channels, kernel_size=k, padding=k // 2),
+                          nn.BatchNorm1d(conv_channels), nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i)))
+            for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
         ])
 
         # 时空LSTM编码器
@@ -377,10 +380,13 @@ class ServiceBranch(nn.Module):
 
         # 层次化注意力机制
         if 'hier' in mode:
-            self.temporal_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden, num_heads=attn_heads, batch_first=True)
+            self.temporal_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden,
+                                                       num_heads=attn_heads,
+                                                       batch_first=True)
             self.service_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden, num_heads=attn_heads, batch_first=True)
         else:
-            self.fusion = nn.Sequential(nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(), nn.Linear(512, lstm_hidden))
+            self.fusion = nn.Sequential(nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(),
+                                        nn.Linear(512, lstm_hidden))
 
         # 残差连接
         self.residual = nn.Sequential(nn.Conv1d(feature_dim, 2 * lstm_hidden, 1), nn.BatchNorm1d(2 * lstm_hidden))
@@ -446,7 +452,8 @@ class LatencyBranch(nn.Module):
         self.use_attention = use_attention
 
         # 时序特征提取
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=lstm_hidden, batch_first=True, bidirectional=True)  # 使用双向LSTM
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=lstm_hidden, batch_first=True,
+                            bidirectional=True)  # 使用双向LSTM
 
         # 注意力机制
         if self.use_attention:
@@ -598,7 +605,8 @@ class SLOTrainer:
         self.model = self._init_model(service_mode).to(self.device)
 
         # 损失函数修改为CrossEntropyLoss
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(self.device) if class_weights is not None else None)
+        self.criterion = nn.CrossEntropyLoss(
+            weight=class_weights.to(self.device) if class_weights is not None else None)
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
         self.scaler_manager = None
@@ -818,7 +826,9 @@ def analyze_feature_importance(model, sample):
 
 def main():
     # 数据预处理
-    train_data, val_data, test_data, service_scalers, latency_scaler = process_data(window_size=30, pred_window=5, threshold=500)
+    train_data, val_data, test_data, service_scalers, latency_scaler = process_data(window_size=30,
+                                                                                    pred_window=5,
+                                                                                    threshold=500)
 
     # 计算类别权重（处理不平衡数据）
     from sklearn.utils.class_weight import compute_class_weight
