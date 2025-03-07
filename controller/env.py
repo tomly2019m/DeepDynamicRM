@@ -58,6 +58,8 @@ class Env:
         # 可选动作列表
         self.actions = []
         self._load_actions()
+        # 最低分配数量
+        self.min_allocate = 25
 
         # 保存资源配置历史
         self.allocation_history = []
@@ -420,10 +422,13 @@ class Env:
         action_type = self.actions[action]["type"]
         action_value = self.actions[action]["value"]
 
+        self.min_perrep = self.min_allocate / sum(self.replica_dict.values())
+
         # 保存当前状态到历史记录（用于recover）
         self.allocation_history.append(deepcopy(self.allocate_dict))
         if len(self.allocation_history) > 10:  # 保留最近10次记录
             self.allocation_history.pop(0)
+
         load = {}
         for service in self.allocate_dict:
             mean_util = self.cpu_state[service][2]  # 获取平均利用率
@@ -440,11 +445,17 @@ class Env:
 
         elif action_type == "decrease":
             # 找到负载最低的服务减少资源
-            target_service = min(load, key=lambda k: load[k])
-            new_allocation[target_service] = max(
-                0.2,  # 保持最小分配量
-                new_allocation[target_service] - action_value,
-            )
+            # 过滤掉 allocate 值为 self.min_perrep 的服务
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+            ]
+            if len(candidates) > 0:
+                target_service = min(candidates, key=lambda k: load[k])
+                new_allocation[target_service] = max(
+                    self.min_perrep * self.replica_dict[target_service],  # 保持最小分配量
+                    new_allocation[target_service] - action_value,
+                )
 
         elif action_type == "increase_batch":
             # 增加前所有可调服务的CPU配额
@@ -456,9 +467,15 @@ class Env:
                 )
 
         elif action_type == "decrease_batch":
-            candidates = self.scalable_service
-            for service in candidates:
-                new_allocation[service] = max(0.2, new_allocation[service] - action["value"])
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+            ]
+
+            if len(candidates) > 0:
+                for service in candidates:
+                    new_allocation[service] = max(self.min_perrep * self.replica_dict[service],
+                                                  new_allocation[service] - action["value"])
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
@@ -470,8 +487,15 @@ class Env:
 
         elif action_type == "decrease_percent":
             # 按百分比减少低负载服务
-            target_service = min(load, key=lambda k: load[k])
-            new_allocation[target_service] = max(0.2, new_allocation[target_service] * (1 - action["value"]))
+            # 过滤掉 allocate 值为 self.min_perrep 的服务
+            candidates = [
+                service for service in load if self.allocate_dict[service] -
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+            ]
+            if len(candidates) > 0:
+                target_service = min(candidates, key=lambda k: load[k])
+                new_allocation[target_service] = max(self.min_perrep * self.replica_dict[target_service],
+                                                     new_allocation[target_service] * (1 - action["value"]))
 
         elif action_type == "reset":
             # 重置到初始配置
@@ -482,16 +506,14 @@ class Env:
             pass
 
         elif action_type == "recover":
-            # 恢复到上一次有效分配
-            if len(self.allocation_history) >= 2:
-                new_allocation = deepcopy(self.allocation_history[-2])
-                self.allocation_history.pop(-1)  # 移除当前无效记录
+            # 恢复到self.history_length之前有效分配
+            if len(self.allocation_history) == self.history_length:
+                new_allocation = deepcopy(self.allocation_history[0])
 
         for service in new_allocation:
-            if new_allocation[service] < 0.2:  # 资源分配下限保护
-                new_allocation[service] = 0.2
+            if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
+                new_allocation[service] = self.min_perrep * self.replica_dict[service]
 
-        set_cpu_limit(new_allocation, self.replica_dict)
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)
         self.allocate_dict = new_allocation
@@ -541,27 +563,6 @@ class Env:
 
             # 总惩罚取负（原始设计全为负数奖励）
             return -(delay_penalty + ongoing_penalty)
-
-    def _empty_state(self):
-        """生成空状态占位"""
-        return {
-            "cpu": {
-                i: []
-                for i in range(28)
-            },
-            "memory": {
-                i: []
-                for i in range(28)
-            },
-            "io": {
-                i: []
-                for i in range(28)
-            },
-            "network": {
-                i: []
-                for i in range(28)
-            }
-        }
 
     async def reset(self):
         """重置环境"""
