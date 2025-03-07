@@ -26,7 +26,7 @@ from predictor.slo_predictor import DynamicSLOPredictor
 
 class Env:
 
-    def __init__(self, connections, exp_time=300, window_size=10):
+    def __init__(self, connections, exp_time=300, window_size=30):
 
         self.config_path = f"{PROJECT_ROOT}/communication/comm.json"
         # 读取配置文件

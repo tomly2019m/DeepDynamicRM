@@ -24,8 +24,22 @@ save_dir = f"{PROJECT_ROOT}/predictor/model"
 
 # 加载三个数据集
 gathered = np.load(f"{data_dir}/gathered.npy")  # 形状 (n,28,6,4)
-latency = np.load(f"{data_dir}/latency.npy")  # 形状 (n,5)
+latency = np.load(f"{data_dir}/latency.npy")  # 形状 (n,6)
 replicas = np.load(f"{data_dir}/replicas.npy")  # 形状 (28,)
+cpu_configs = np.load(f"{data_dir}/cpu_config.npy")  # 形状（n,28）
+
+# 加载三个数据集后添加
+print("\n原始数据NaN检查:")
+print("gathered:", np.isnan(gathered).any())
+print("latency:", np.isnan(latency).any())
+print("replicas:", np.isnan(replicas).any())
+
+nan_rows = np.isnan(latency).any(axis=1)
+valid_indices = ~nan_rows  # 有效时间步的掩码
+
+gathered = gathered[valid_indices]
+latency = latency[valid_indices]
+cpu_configs = cpu_configs[valid_indices]
 
 # ----------------------------------
 # 步骤2：数据完整性验证
@@ -52,27 +66,31 @@ def process_gathered(gathered, replicas):
     # 展平最后两个维度 (n,28,6,4) → (n,28,24)
     flattened = gathered.reshape(n_timesteps, 28, -1)
 
+    replicas = np.log1p(replicas)  # 加1避免log(0)
+
     # 直接广播原始副本数（不标准化）到所有时间步：(28,) → (n,28,1)
     replicas_expanded = np.tile(
         replicas.reshape(1, -1, 1),  # 先变形为 (1,28,1)
         (n_timesteps, 1, 1)  # 沿时间步复制n次 → (n,28,1)
     ).astype(np.float32)  # 统一数据类型
 
-    # 拼接特征 → (n,28,25)
-    merged = np.concatenate([flattened, replicas_expanded], axis=-1)
+    # 拼接特征 → (n,28,26)
 
-    # 仅对前24列（统计量）进行服务级标准化
+    merged = np.concatenate([flattened, cpu_configs, replicas_expanded],
+                            axis=-1)
+
+    # 仅对前25列（统计量）进行服务级标准化
     service_scalers = []
     for i in range(28):
         scaler = StandardScaler()
-        # 只标准化前24列，保留副本数原始值
-        merged[:, i, :24] = scaler.fit_transform(merged[:, i, :24])
+        # 只标准化前25列，保留副本数原始值
+        merged[:, i, :25] = scaler.fit_transform(merged[:, i, :25])
         service_scalers.append(scaler)
 
     return merged, service_scalers
 
 
-def process_data(window_size=10,
+def process_data(window_size=30,
                  pred_window=5,
                  threshold=500,
                  save_scalers=True):
@@ -80,7 +98,7 @@ def process_data(window_size=10,
     处理时序数据生成带滑动窗口的训练数据集
     
     参数:
-    window_size (int): 输入模型的历史时间步数，默认用过去10个时间步预测未来
+    window_size (int): 输入模型的历史时间步数，默认用过去30个时间步预测未来
     pred_window (int): 预测未来多少个时间步的违例状态，默认预测未来5个时间步
     threshold (int): SLO违例阈值(单位:ms)，默认500ms，超过则标记为违例
     
@@ -97,7 +115,7 @@ def process_data(window_size=10,
     1. 服务数据预处理: 融合副本数量并标准化统计量
     2. 延迟数据预处理: 标准化延迟指标(除P99外)
     3. 滑动窗口生成: 用window_size步历史数据预测未来pred_window步的违例状态
-    4. 时序数据划分: 按70-15-15比例分割训练/验证/测试集，保持时间连续性
+    4. 时序数据划分: 按80-10-10比例分割训练/验证/测试集，保持时间连续性
     5. 标签生成: 计算预测窗口内P99延迟的平均值，超过阈值标记为违例(1)
     """
 
@@ -106,7 +124,7 @@ def process_data(window_size=10,
 
     # 处理第二类数据：保留原始延迟数据用于标签生成
     raw_latency = latency.copy()  # 原始未标准化的延迟数据
-    percentile_idx = 3  # 假设'99%'延迟在latency数据的第3列
+    percentile_idx = -2  # 假设'99%'延迟在latency数据的倒数第二列
 
     # 标准化延迟指标（仅用于模型输入）
     latency_scaler = StandardScaler()
@@ -125,15 +143,27 @@ def process_data(window_size=10,
         # 遍历所有可能的起始点（确保预测窗口不越界）
         for i in range(window_size, n_timesteps - pred_window + 1):
             # 输入窗口：i-window_size 到 i-1
-            serv_window = X_serv[i - window_size:i]  # (window_size, 28, 25)
-            lat_window = X_lat[i - window_size:i]  # (window_size, 5)
+            serv_window = X_serv[i - window_size:i]  # (window_size, 28, 26)
+            lat_window = X_lat[i - window_size:i]  # (window_size, 6)
 
             # 预测窗口：i 到 i+pred_window-1
             pred_values = raw_lat[i:i + pred_window, percentile_idx]
 
-            # 生成标签：平均P99延迟是否超过阈值
-            avg_p99 = np.mean(pred_values)
-            label = 1 if avg_p99 > threshold else 0
+            # 生成标签：未来的P99延迟极值是否超过阈值
+            max_p99 = np.mean(pred_values)
+            # 手动分类逻辑
+            if max_p99 <= 100:
+                label = 0
+            elif max_p99 <= 200:
+                label = 1
+            elif max_p99 <= 300:
+                label = 2
+            elif max_p99 <= 400:
+                label = 3
+            elif max_p99 <= 500:
+                label = 4
+            else:
+                label = 5
 
             samples_serv.append(serv_window)
             samples_lat.append(lat_window)
@@ -153,6 +183,15 @@ def process_data(window_size=10,
     # 按时间顺序划分数据集（样本已有序）
     # ----------------------------------
     num_samples = len(y_all)
+
+    indices = np.arange(num_samples)
+    np.random.shuffle(indices)  # 打乱索引顺序
+
+    # 使用打乱后的索引重新排列所有数据
+    # X_serv_all = X_serv_all[indices]
+    # X_lat_all = X_lat_all[indices]
+    # y_all = y_all[indices]
+
     train_end = int(num_samples * 0.8)
     val_end = int(num_samples * 0.9)
 
@@ -202,108 +241,192 @@ def process_data(window_size=10,
 
 
 class ServiceBranch(nn.Module):
-    """支持两种聚合模式的服务数据处理模块"""
+    """增强版服务特征提取模块，支持多尺度时空特征融合"""
 
     def __init__(
             self,
-            feature_dim=25,
-            time_steps=10,
+            feature_dim=26,
+            time_steps=30,
+            service_num=28,
             conv_channels=64,
             lstm_hidden=128,
-            mode='attention',  # 新增模式参数 ['attention', 'pooling']
-            attn_heads=4):  # 注意力模式专用参数
+            mode='hier_attention',  # 新增模式 ['hier_attention', 'multi_scale']
+            attn_heads=4):
         super().__init__()
         self.mode = mode
+        self.lstm_hidden = lstm_hidden
 
-        # 共享的时序特征提取层
-        self.conv = nn.Conv1d(in_channels=feature_dim,
-                              out_channels=conv_channels,
-                              kernel_size=3,
-                              padding=1)
-        self.lstm = nn.LSTM(input_size=conv_channels,
-                            hidden_size=lstm_hidden,
-                            batch_first=True)
+        # 多尺度卷积网络
+        self.conv_blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(feature_dim,
+                          conv_channels,
+                          kernel_size=k,
+                          padding=k // 2), nn.BatchNorm1d(conv_channels),
+                nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i)))
+            for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
+        ])
 
-        # 模式分支
-        if self.mode == 'attention':
-            # 注意力机制
-            self.service_query = nn.Parameter(
-                torch.randn(1, attn_heads, lstm_hidden))
-            self.attn = nn.MultiheadAttention(embed_dim=lstm_hidden,
-                                              num_heads=attn_heads,
-                                              batch_first=True)
-            self.output_proj = nn.Linear(lstm_hidden, lstm_hidden)
-        elif self.mode == 'pooling':
-            # 自适应池化
-            self.pool = nn.AdaptiveAvgPool1d(1)
+        # 时空LSTM编码器
+        self.lstm = nn.LSTM(
+            input_size=conv_channels * 3,  # 多尺度特征拼接
+            hidden_size=lstm_hidden,
+            bidirectional=True,  # 使用双向LSTM
+            batch_first=True)
+
+        # 层次化注意力机制
+        if 'hier' in mode:
+            self.temporal_attn = nn.MultiheadAttention(embed_dim=2 *
+                                                       lstm_hidden,
+                                                       num_heads=attn_heads,
+                                                       batch_first=True)
+            self.service_attn = nn.MultiheadAttention(embed_dim=2 *
+                                                      lstm_hidden,
+                                                      num_heads=attn_heads,
+                                                      batch_first=True)
         else:
-            raise ValueError(f"Unsupported mode: {self.mode}")
+            self.fusion = nn.Sequential(
+                nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(),
+                nn.Linear(512, lstm_hidden))
+
+        # 残差连接
+        self.residual = nn.Sequential(
+            nn.Conv1d(feature_dim, 2 * lstm_hidden, 1),
+            nn.BatchNorm1d(2 * lstm_hidden))
+
+        # 最终投影
+        self.proj = nn.Linear(2 * lstm_hidden, lstm_hidden)
 
     def forward(self, x):
         """
         输入形状: (B, T, S, F)
-        输出形状: (B, lstm_hidden)
+        输出形状: (B, H)
         """
         B, T, S, F = x.size()
 
-        # 公共特征提取流程
-        x = x.permute(0, 2, 1, 3)  # (B, S, T, F)
-        x = x.reshape(-1, T, F)  # (B*S, T, F)
-        x = self.conv(x.permute(0, 2, 1)).permute(0, 2, 1)  # (B*S, T, C)
-        x, _ = self.lstm(x)  # (B*S, T, H)
-        x = x[:, -1, :]  # (B*S, H)
-        x = x.view(B, S, -1)  # (B, S, H)
+        # 多尺度特征提取 ----------------------------
+        # 转换维度: (B, T, S, F) -> (B*S, F, T)
+        x_reshaped = x.permute(0, 2, 1, 3).reshape(-1, F, T)
 
-        # 模式分支处理
-        if self.mode == 'attention':
-            # 注意力聚合
-            query = self.service_query.expand(B, -1, -1)  # (B, heads, H)
-            attn_out, _ = self.attn(query=query, key=x,
-                                    value=x)  # (B, heads, H)
-            out = self.output_proj(attn_out.mean(dim=1))  # (B, H)
-        elif self.mode == 'pooling':
-            # 池化聚合
-            out = self.pool(x.permute(0, 2, 1)).squeeze(-1)  # (B, H)
+        # 并行多尺度卷积
+        conv_features = []
+        for conv in self.conv_blocks:
+            feat = conv(x_reshaped)  # (B*S, C, T')
+            feat = feat.reshape(B, S, -1, T // 2)  # 降采样后的时间维度
+            conv_features.append(feat)
 
-        return out
+        # 多尺度特征拼接 (B*S, 3C, T//2)
+        multi_scale = torch.cat(conv_features, dim=1)
+
+        # 时空特征编码 ----------------------------
+        # LSTM处理: (B*S, 3C, T//2) -> (B*S, T//2, 2H)
+        lstm_out, _ = self.lstm(multi_scale.permute(0, 2, 1))
+
+        # 残差连接
+        residual = self.residual(x_reshaped).permute(0, 2, 1)  # (B*S, T, 2H)
+        lstm_out += residual[:, :lstm_out.size(1), :]  # 对齐时间维度
+
+        # 注意力融合 ----------------------------
+        if 'hier' in self.mode:
+            # 时间维度注意力
+            temporal_attn, _ = self.temporal_attn(lstm_out, lstm_out,
+                                                  lstm_out)  # (B*S, T', 2H)
+
+            # 服务维度注意力 (B, S, T', 2H)
+            temporal_attn = temporal_attn.view(B, S, -1, 2 * self.lstm_hidden)
+            service_attn, _ = self.service_attn(
+                temporal_attn.mean(dim=2),  # (B, S, 2H)
+                temporal_attn.mean(dim=2),
+                temporal_attn.mean(dim=2))  # (B, S, 2H)
+            out = service_attn.mean(dim=1)  # (B, 2H)
+        else:
+            # 全量特征融合
+            flattened = lstm_out.reshape(B, S, -1)  # (B, S, T'*2H)
+            out = self.fusion(flattened.mean(dim=1))  # (B, H)
+            return out
+
+        return self.proj(out)  # (B, H)
 
 
 class LatencyBranch(nn.Module):
-    """处理延迟数据的固定网络模块"""
+    """处理延迟数据的增强模块，使用时间序列全局信息"""
 
-    def __init__(self, input_dim=5, time_steps=10, lstm_hidden=64):
+    def __init__(self,
+                 input_dim=6,
+                 time_steps=30,
+                 lstm_hidden=64,
+                 use_attention=True):
         super().__init__()
+        self.use_attention = use_attention
 
+        # 时序特征提取
         self.lstm = nn.LSTM(input_size=input_dim,
                             hidden_size=lstm_hidden,
-                            batch_first=True)
+                            batch_first=True,
+                            bidirectional=True)  # 使用双向LSTM
+
+        # 注意力机制
+        if self.use_attention:
+            self.attention = nn.Sequential(
+                nn.Linear(2 * lstm_hidden, 64),  # 双向所以是2倍
+                nn.Tanh(),
+                nn.Linear(64, 1),
+                nn.Softmax(dim=1))
+
+        # 特征融合
+        self.fc = nn.Sequential(
+            nn.Linear(2 * lstm_hidden * time_steps, 256),  # 全量信息融合
+            nn.ReLU(),
+            nn.Linear(256, lstm_hidden))
 
     def forward(self, x):
         """
-        输入形状: (batch_size, time_steps, 5)
-        输出形状: (batch_size, lstm_hidden)
+        输入形状: (B, T, D=6)
+        输出形状: (B, H=64)
         """
-        # LSTM处理 → (B, T, lstm_hidden)
-        x, (h_n, _) = self.lstm(x)
+        # LSTM特征提取 → (B, T, 2H)
+        lstm_out, _ = self.lstm(x)  # 双向输出
 
-        # 取最后隐藏状态 → (B, lstm_hidden)
-        return h_n[-1]
+        if self.use_attention:
+            # 时序注意力加权
+            attn_weights = self.attention(lstm_out)  # (B, T, 1)
+            weighted = torch.sum(lstm_out * attn_weights, dim=1)  # (B, 2H)
+        else:
+            # 全量特征拼接
+            batch_size = x.size(0)
+            flattened = lstm_out.reshape(batch_size, -1)  # (B, T*2H)
+            weighted = self.fc(flattened)  # (B, H)
+
+        return weighted
 
 
 class DynamicSLOPredictor(nn.Module):
 
-    def __init__(self, service_mode='attention'):
+    def __init__(self, service_mode='hier_attention'):
         super().__init__()
-        self.service_net = ServiceBranch(mode=service_mode)
-        self.latency_net = LatencyBranch()
+        # 特征提取模块（保持原始设计）
+        self.service_net = ServiceBranch(mode=service_mode)  # 输出维度 (B, 128)
+        self.latency_net = LatencyBranch()  # 输出维度 (B, 64)
 
-        self.classifier = nn.Sequential(nn.Linear(128 + 64, 64), nn.ReLU(),
-                                        nn.Linear(64, 1), nn.Sigmoid())
+        # 修改后的六分类器
+        self.classifier = nn.Sequential(
+            nn.Linear(128 + 64, 256),  # 增加中间层维度
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(256, 64),
+            nn.GELU(),
+            nn.Linear(64, 6)  # 输出6个类别
+        )
 
     def forward(self, service_data, latency_data):
-        service_feat = self.service_net(service_data)
-        latency_feat = self.latency_net(latency_data)
-        return self.classifier(torch.cat([service_feat, latency_feat], dim=1))
+        # 特征提取（无需修改）
+        service_feat = self.service_net(service_data)  # (B, 128)
+        latency_feat = self.latency_net(latency_data)  # (B, 64)
+
+        # 特征拼接与分类
+        combined = torch.cat([service_feat, latency_feat], dim=1)
+        return self.classifier(combined)
 
 
 class OnlineScaler:
@@ -371,16 +494,17 @@ class OnlineScaler:
 
 class SLOTrainer:
 
-    def __init__(self,
-                 service_mode='attention',
-                 device='cuda',
-                 pos_weight=2.0,
-                 batch_size=64):
+    def __init__(
+            self,
+            service_mode='hier_attention',
+            device='cuda',
+            class_weights=None,  # 新增参数：类别权重
+            batch_size=64):
         """
         参数:
-            service_mode: 'attention' 或 'pooling'
+            service_mode: 'hier_attention' 或 'mutil_scale'
             device: 计算设备
-            pos_weight: 正样本权重
+            class_weights: 类别权重张量 (长度6)
             batch_size: 批大小
         """
         self.device = device if torch.cuda.is_available() else 'cpu'
@@ -389,14 +513,77 @@ class SLOTrainer:
 
         # 初始化模型组件
         self.model = self._init_model(service_mode).to(self.device)
-        self.criterion = torch.nn.BCEWithLogitsLoss(
-            pos_weight=torch.tensor([pos_weight]).to(self.device))
+
+        # 损失函数修改为CrossEntropyLoss
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(
+            self.device) if class_weights is not None else None)
+
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
-        self.scaler_manager = None  # 标准化管理器
+        self.scaler_manager = None
 
     def _init_model(self, mode):
-        """初始化双分支模型"""
         return DynamicSLOPredictor(service_mode=mode)
+
+    class SLODataset(TensorDataset):
+
+        def __init__(self, service_data, latency_data, labels):
+            # 标签改为长整型
+            super().__init__(
+                torch.FloatTensor(service_data),
+                torch.FloatTensor(latency_data),
+                torch.LongTensor(labels)  # 修改为LongTensor
+            )
+
+    def train_epoch(self):
+        self.model.train()
+        total_loss = 0
+
+        for service, latency, labels in self.train_loader:
+            service = service.to(self.device)
+            latency = latency.to(self.device)
+            labels = labels.to(self.device)  # labels自动转为torch.long
+
+            self.optimizer.zero_grad()
+
+            # 输出形状 (B,6)
+            outputs = self.model(service, latency)
+
+            # 直接计算交叉熵损失
+            loss = self.criterion(outputs, labels)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+
+            total_loss += loss.item()
+
+        return total_loss / len(self.train_loader)
+
+    def evaluate(self, loader):
+        self.model.eval()
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for service, latency, labels in loader:
+                service = service.to(self.device)
+                latency = latency.to(self.device)
+
+                outputs = self.model(service, latency)
+                preds = torch.argmax(outputs, dim=1)  # 取最大概率类别
+
+                all_preds.append(preds.cpu().numpy())
+                all_labels.append(labels.numpy())
+
+        y_true = np.concatenate(all_labels)
+        y_pred = np.concatenate(all_preds)
+
+        metrics = {
+            'accuracy': accuracy_score(y_true, y_pred),
+            'f1_macro': f1_score(y_true, y_pred, average='macro'),
+            'f1_weighted': f1_score(y_true, y_pred, average='weighted')
+        }
+        return metrics
 
     def prepare_data(self, train_data, val_data, test_data):
         """数据预处理与加载器准备"""
@@ -414,82 +601,9 @@ class SLOTrainer:
         self.test_loader = DataLoader(self.test_dataset,
                                       batch_size=self.batch_size)
 
-    class SLODataset(TensorDataset):
-        """多模态时序数据集"""
-
-        def __init__(self, service_data, latency_data, labels):
-            super().__init__(torch.FloatTensor(service_data),
-                             torch.FloatTensor(latency_data),
-                             torch.FloatTensor(labels))
-
-        def __getitem__(self, idx):
-            return (
-                self.tensors[0][idx],  # service (T, S, F)
-                self.tensors[1][idx],  # latency (T, D)
-                self.tensors[2][idx]  # label
-            )
-
-    def train_epoch(self):
-        """修改后的训练周期"""
-        self.model.train()
-        total_loss = 0
-
-        for service, latency, labels in self.train_loader:
-            # 数据迁移到设备
-            service = service.to(self.device)
-            latency = latency.to(self.device)
-            labels = labels.to(self.device)
-
-            # 梯度清零
-            self.optimizer.zero_grad()
-
-            # 前向传播（移除autocast）
-            outputs = self.model(service, latency).squeeze()
-            loss = self.criterion(outputs, labels)
-
-            # 反向传播（移除scaler）
-            loss.backward()
-
-            # 梯度裁剪
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-            # 参数更新
-            self.optimizer.step()
-
-            total_loss += loss.item()
-
-        return total_loss / len(self.train_loader)
-
-    def evaluate(self, loader):
-        """在指定数据集上评估模型"""
-        self.model.eval()
-        all_preds = []
-        all_labels = []
-
-        with torch.no_grad():
-            for service, latency, labels in loader:
-                service = service.to(self.device)
-                latency = latency.to(self.device)
-
-                outputs = self.model(service, latency).squeeze()
-                probs = torch.sigmoid(outputs).cpu().numpy()
-
-                all_preds.append(probs)
-                all_labels.append(labels.numpy())
-
-        y_true = np.concatenate(all_labels)
-        y_pred = np.concatenate(all_preds)
-
-        metrics = {
-            'accuracy': accuracy_score(y_true, y_pred > 0.5),
-            'auc': roc_auc_score(y_true, y_pred),
-            'f1': f1_score(y_true, y_pred > 0.5)
-        }
-        return metrics
-
-    def train(self, epochs=100, early_stop=10):
-        """完整训练流程"""
-        best_auc = 0
+    def train(self, epochs=5000, early_stop=5000):
+        """使用验证集准确率作为早停标准"""
+        best_acc = 0
         no_improve = 0
 
         for epoch in range(epochs):
@@ -499,12 +613,12 @@ class SLOTrainer:
             print(f"Epoch {epoch+1:03d} | "
                   f"Train Loss: {train_loss:.4f} | "
                   f"Val Acc: {val_metrics['accuracy']:.4f} | "
-                  f"AUC: {val_metrics['auc']:.4f} | "
-                  f"F1: {val_metrics['f1']:.4f}")
+                  f"Macro-F1: {val_metrics['f1_macro']:.4f} | "
+                  f"Weighted-F1: {val_metrics['f1_weighted']:.4f}")
 
-            # 保存最佳模型
-            if val_metrics['auc'] > best_auc:
-                best_auc = val_metrics['auc']
+            # 以准确率为早停标准
+            if val_metrics['accuracy'] > best_acc:
+                best_acc = val_metrics['accuracy']
                 self.save_checkpoint()
                 no_improve = 0
             else:
@@ -532,83 +646,6 @@ class SLOTrainer:
         self.model.load_state_dict(checkpoint['model_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
         self.scaler_manager = checkpoint['scaler_manager']
-
-
-def train_example(epochs: int = 500,
-                  batch_size: int = 64,
-                  pos_weight: float = 2.0,
-                  device: str = "cuda",
-                  service_mode: str = "attention",
-                  save_dir: str = f"{PROJECT_ROOT}/predictor/model",
-                  window_size: int = 10,
-                  pred_window: int = 5,
-                  threshold: int = 500):
-    """
-    完整的训练流程示例
-    
-    参数:
-        epochs (int): 训练轮数，默认500
-        batch_size (int): 批大小，默认64
-        pos_weight (float): 正样本权重，默认2.0
-        device (str): 计算设备，默认"cuda"
-        service_mode (str): 服务分支模式，["attention", "pooling"]
-        save_dir (str): 模型和标准化器保存路径
-        window_size (int): 输入时间窗口大小，默认10
-        pred_window (int): 预测时间窗口，默认5
-        threshold (int): SLO违例阈值(ms)，默认500
-    """
-    # 数据预处理
-    train_data, val_data, test_data, service_scalers, latency_scaler = process_data(
-        window_size=window_size, pred_window=pred_window, threshold=threshold)
-
-    # 打印数据集信息
-    def print_shape_info(name, data):
-        print(
-            f"{name}服务数据: {data[0].shape} | 延迟数据: {data[1].shape} | 标签: {data[2].shape}"
-        )
-
-    print("\n" + "=" * 40)
-    print_shape_info("训练集", train_data)
-    print_shape_info("验证集", val_data)
-    print_shape_info("测试集", test_data)
-    print("=" * 40 + "\n")
-
-    # 初始化训练器
-    trainer = SLOTrainer(service_mode=service_mode,
-                         device=device,
-                         pos_weight=pos_weight,
-                         batch_size=batch_size)
-
-    # 准备数据加载器
-    trainer.prepare_data(train_data, val_data, test_data)
-
-    # 训练流程
-    try:
-        print(f"开始训练，共{epochs}个epoch...")
-        trainer.train(epochs=epochs)
-    except KeyboardInterrupt:
-        print("\n训练中断，保存临时模型...")
-        trainer.save_checkpoint(f"{save_dir}/interrupted_model.pth")
-    finally:
-        # 始终保存最终模型
-        trainer.save_checkpoint(f"{save_dir}/final_model.pth")
-        print(f"模型已保存至 {save_dir}/final_model.pth")
-
-    # 测试集评估
-    test_metrics = trainer.evaluate(trainer.test_loader)
-    print("\n" + "=" * 40)
-    print("测试集最终表现:")
-    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"AUC-ROC:  {test_metrics['auc']:.4f}")
-    print(f"F1 Score: {test_metrics['f1']:.4f}")
-    print("=" * 40)
-
-    # 保存标准化器
-    joblib.dump(service_scalers, f"{save_dir}/service_scalers.pkl")
-    joblib.dump(latency_scaler, f"{save_dir}/latency_scaler.pkl")
-    print(f"\n标准化器已保存至 {save_dir}")
-
-    return trainer  # 返回训练器对象以便后续使用
 
 
 def predict_example():
@@ -704,43 +741,64 @@ def predict_example():
     case_new_services()
 
 
+def analyze_feature_importance(model, sample):
+    import shap
+    explainer = shap.DeepExplainer(model, sample)
+    shap_values = explainer.shap_values(sample)
+    shap.summary_plot(shap_values, sample)
+
+
 def main():
-    # 使用示例
+    # 数据预处理
     train_data, val_data, test_data, service_scalers, latency_scaler = process_data(
-    )
+        window_size=30, pred_window=5, threshold=500)
 
-    # 典型维度示例 (假设 window_size=10，总共有1000个样本):
-    # --------------------------------------------------
-    # | 数据集  | 服务数据形状         | 延迟数据形状     | 标签形状 |
-    # |---------|---------------------|-----------------|----------|
-    # | 训练集  | (800, 10, 28, 25)  | (800, 10, 5)    | (800,)   |
-    # | 验证集  | (100, 10, 28, 25)  | (100, 10, 5)    | (100,)   |
-    # | 测试集  | (100, 10, 28, 25)  | (100, 10, 5)    | (100,)   |
-    # --------------------------------------------------
+    # 计算类别权重（处理不平衡数据）
+    from sklearn.utils.class_weight import compute_class_weight
+    _, _, y_train = train_data
+    class_weights = compute_class_weight('balanced',
+                                         classes=np.arange(6),
+                                         y=y_train)
+    class_weights = torch.tensor(class_weights, dtype=torch.float32)
 
-    # 预处理对象说明：
-    # service_scalers: 列表长度28，每个元素是StandardScaler对象
-    #   每个scaler对应一个服务的前24个特征的标准化参数
-    # latency_scaler:  StandardScaler对象，用于延迟数据的5个特征
+    # 初始化训练器
+    trainer = SLOTrainer(
+        service_mode='hier_attention',
+        device='cuda' if torch.cuda.is_available() else 'cpu',
+        class_weights=class_weights,  # 传入类别权重
+        batch_size=128)
 
-    trainer = SLOTrainer(service_mode='attention',
-                         device='cuda',
-                         pos_weight=2.0)
-    trainer.prepare_data(train_data, val_data, test_data)
-
-    # 执行训练
+    # 准备数据（添加维度验证）
     try:
-        trainer.train(epochs=500)
-    except KeyboardInterrupt:
-        print("Training interrupted, saving latest model...")
-        trainer.save_checkpoint('interrupted.pth')
+        trainer.prepare_data(train_data, val_data, test_data)
+    except AssertionError as e:
+        print(f"数据校验失败: {str(e)}")
+        return
 
-    # 最终评估
+    # 训练流程（增加学习率调度）
+    try:
+        trainer.train(epochs=5000, early_stop=5000)  # 早停窗口设为5000个epoch
+    except KeyboardInterrupt:
+        print("\n训练中断，保存临时模型...")
+        trainer.save_checkpoint(f"{save_dir}/interrupted.pth")
+
+    # 最终测试集评估
+    print("\n" + "=" * 50)
+    print("测试集最终表现:")
     test_metrics = trainer.evaluate(trainer.test_loader)
-    print(f"\nFinal Test Metrics:")
-    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"AUC-ROC: {test_metrics['auc']:.4f}")
-    print(f"F1 Score: {test_metrics['f1']:.4f}")
+    print(f"准确率: {test_metrics['accuracy']:.4f}")
+    print(f"宏平均F1: {test_metrics['f1_macro']:.4f}")
+    print(f"加权F1: {test_metrics['f1_weighted']:.4f}")
+
+    # 保存最终模型
+    trainer.save_checkpoint(f"{save_dir}/final_model.pth")
+    print(f"模型已保存至 {save_dir}")
+
+    # 可选：特征重要性分析
+    if torch.cuda.is_available():
+        sample_data = (trainer.test_dataset[0][0].unsqueeze(0).cuda(),
+                       trainer.test_dataset[0][1].unsqueeze(0).cuda())
+        analyze_feature_importance(trainer.model, sample_data)
 
 
 if __name__ == "__main__":
