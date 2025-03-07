@@ -596,6 +596,9 @@ def to_numpy(data: dict):
     return numpy_data
 
 
+load_services()
+
+
 def transform_data(gathered_data):
     # 定义指标处理顺序和对应原始字段
     metric_mapping = OrderedDict([

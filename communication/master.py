@@ -218,7 +218,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
                     for key, cpu_list in gathered["cpu"].items()
                 }
 
-            print(f"当前实验进度: {current_exp_time}/{args.exp_time}")
+            print(f"当前实验进度: {current_exp_time}/{exp_time}")
 
             # 数据处理阶段
             process_start = time.time()
@@ -346,7 +346,7 @@ class Executor:
 
 
 async def main():
-    global gathered_list, replicas
+    global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
     comm_config = ""
@@ -378,18 +378,23 @@ async def main():
     for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
         # setup_slave()
         # 等待slave监听进程启动完成
-        time.sleep(10)
-        #重置实验环境
-        command = ("cd ~/DeepDynamicRM/deploy && "
-                   "~/miniconda3/envs/DDRM/bin/python3 "
-                   "deploy_benchmark.py")
-        execute_command(command, stream_output=True)
+        if users >= 300:
+            time.sleep(10)
+            #重置实验环境
+            command = ("cd ~/DeepDynamicRM/deploy && "
+                       "~/miniconda3/envs/DDRM/bin/python3 "
+                       "deploy_benchmark.py")
+            execute_command(command, stream_output=True)
+        if users >= 300:
+            exp_time = 1500
+        else:
+            exp_time = 500
 
         for load_type in ["constant", "daynight", "bursty", "noisy"]:
             await start_experiment(connections, users, load_type,
                                    mab_config[str(users)])
-    if save:
-        save_data(gathered_list, replicas)
+            if save:
+                save_data(gathered_list, replicas)
 
     for connection in connections.values():
         connection.close()
