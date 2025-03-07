@@ -44,9 +44,10 @@ class Env:
         # 配置其余参数
         self.window_size = window_size
 
-        # 保存缓存数据 当达到10个时间步的数据之后再开始执行决策
+        # 保存缓存数据 当达到30个时间步的数据之后再开始执行决策
         self.buffer = deque(maxlen=self.window_size)
         self.latency_buffer = deque(maxlen=self.window_size)
+        self.config_buffer = deque(maxlen=self.window_size)
 
         # 在预测器训练时，得到的归一化器
         self.scalers = []
@@ -64,9 +65,11 @@ class Env:
 
         # 保存从部署配置文件中读取默认服务配置
         self.default_cpu_config: dict[str, dict[str, float]] = {}
+        self.services = []
 
         self.allocate_dict: dict[str, float] = {}  # 每个服务总的cpu分配
         self.replica_dict: dict[str, int] = {}
+        self.replica_ndarray = []
 
         self.initial_allocation: dict[str, float] = {}  # 初始分配方案，用于reset
         self.max_cpu = 0
@@ -89,6 +92,9 @@ class Env:
 
         self.done_steps = 90 * 200
 
+        # 预填充buffer
+        self.warmup()
+
     # 加载集群配置文件
     def _load_config(self, path):
         with open(path, "r") as f:
@@ -109,6 +115,9 @@ class Env:
             # 提取可扩展服务列表
             self.scalable_service = config.get("scalable_service", [])
 
+            # 服务列表
+            self.services = config.get("service_list", [])
+
             self.max_cpu = config.get("max_cpu", 256)
 
             # 提取完整服务配置
@@ -124,6 +133,11 @@ class Env:
                 # 副本数：使用配置中的 replica 字段
                 self.replica_dict[service_name] = service_conf.get(
                     "replica", 1)
+
+            replica_list = [
+                self.replica_dict.get(service, 1) for service in services
+            ]
+            self.replica_ndarray = np.array(replica_list)
 
             print(f"已自动生成初始分配：{len(self.allocate_dict)} 个服务的CPU配置")
 
@@ -255,17 +269,6 @@ class Env:
 
         print(f"成功建立 {len(self.connections)} 个Slave连接")
 
-    def merge_replicas(self, gathered, replicas):
-        # 将三维服务数据展平为二维 (service_num,6*4=24)
-        flattened_service = gathered.reshape(gathered.shape[0], -1)
-
-        # 将一维副本数据转为列向量 (service_num,1)
-        replicas_col = replicas.reshape(-1, 1)
-
-        # 按列方向拼接，最终形状 (service_num,24+1=25)
-        merged = np.concatenate([flattened_service, replicas_col], axis=1)
-        return merged
-
     def close_all_connections(self):
         """关闭所有连接"""
         for connection in self.connections.values():
@@ -278,28 +281,32 @@ class Env:
         self.predictor.load_state_dict(torch.load(model_path))
         self.predictor.eval()
 
-    async def gather_data(self):
+    def gather_data(self):
         """数据采集接口 获取一个时间步的数据"""
-        tasks = []
-        replicas = []
         gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
-        for connection in self.connections.values():
-            tasks.append(
-                asyncio.create_task(connection.send_command("collect")))
+        while True:
+            modify = False
+            for connection in self.connections.values():
+                result = connection.send_command_sync("collect")
+                if result == "modify":
+                    for connection in self.connections.values():
+                        # 确保容器状态稳定再flush
+                        print("等待容器状态稳定")
+                        time.sleep(5)
+                        connection.send_command_sync("flush")
+                    modify = True
+                    break
+                data_dict = json.loads(result)
+                gathered["cpu"] = concat_data(gathered["cpu"],
+                                              data_dict["cpu"])
+                gathered["memory"] = concat_data(gathered["memory"],
+                                                 data_dict["memory"])
+                gathered["io"] = concat_data(gathered["io"], data_dict["io"])
+                gathered["network"] = concat_data(gathered["network"],
+                                                  data_dict["network"])
+            if not modify:
+                break
 
-        results = await asyncio.gather(*tasks)
-        for result in results:
-            data_dict = json.loads(result)
-            gathered["cpu"] = concat_data(gathered["cpu"], data_dict["cpu"])
-            gathered["memory"] = concat_data(gathered["memory"],
-                                             data_dict["memory"])
-            gathered["io"] = concat_data(gathered["io"], data_dict["io"])
-            gathered["network"] = concat_data(gathered["network"],
-                                              data_dict["network"])
-        if replicas == []:
-            replicas = np.array([
-                len(cpu_list) for cpu_list in gathered["cpu"].values()
-            ]).flatten()
         for k, v in gathered["cpu"].items():
             gathered["cpu"][k] = [item / 1e6 for item in v]
         self.cpu_state = gathered["cpu"]
@@ -309,61 +316,109 @@ class Env:
         gathered["io"] = process_data(gathered["io"])
         gathered["network"] = process_data(gathered["network"])
         gathered = transform_data(gathered)  # 转化为(service_num, 6, 4)
-        status = self.merge_replicas(gathered, replicas)  # (service_num, 25)
+        status = gathered.reshape(gathered.shape[0], -1)  # -1 表示自动计算维度
         return status, latency
 
-    async def warmup(self):
-        """预热，倒计时10秒填充buffer"""
-        self.buffer = []
-        self.latency_buffer = []
-        countdown = 10
+    def convert_to_ndarray(self, allocate):
+        """
+        将输入的allocate字典按照self.services列表的顺序转换为numpy数组
+        
+        Args:
+            allocate: 包含服务资源分配的字典
+            
+        Returns:
+            numpy.ndarray: 按services顺序排列的资源分配数组
+        """
+        # 初始化一个与services长度相同的数组
+        ndarray = np.zeros(len(self.services))
+
+        # 按照services的顺序填充数组
+        for i, service in enumerate(self.services):
+            ndarray[i] = allocate[service]
+
+        return ndarray
+
+    def warmup(self):
+        """预热，倒计时30秒填充buffer"""
+        countdown = self.window_size
 
         while countdown > 0:
-            data, latency = await self.gather_data()
+            data, latency = self.gather_data()
             self.buffer.append(data)
             self.latency_buffer.append(latency)
+
+            # 配置列表预填充最初的配置
+            self.config_buffer.append(
+                self.convert_to_ndarray(self.initial_allocation))
+
             time.sleep(1)
             countdown -= 1
             print(f"剩余预热时间: {countdown}秒")
 
     def get_state_and_latency(self):
-        """返回形状为 (10,28,25) 和 (10,5) 的归一化数据"""
-        service_data = np.array(self.buffer)  # 形状 (10,28,25)
-        latency_data = np.array(self.latency_buffer)  # 形状 (10,5)
+        """返回形状为 (30,28,26) 和 (30,6) 的归一化数据"""
+        service_data = np.array(self.buffer)  # 形状 (30,28,24)
+        latency_data = np.array(self.latency_buffer)  # 形状 (30,6)
+        config_data = np.array(self.config_buffer)  # 形状 (30,28)
+        replica_data = np.array(self.replica_ndarray)  # 形状 (28, )
+
+        # ========== 特征拼接 ==========
+        # 1. 将 config_data 扩展维度后与 service_data 拼接
+        config_expanded = config_data[..., np.newaxis]  # 形状 (30, 28, 1)
+        service_config = np.concatenate([service_data, config_expanded],
+                                        axis=2)  # 形状 (30, 28, 25)
+
+        # 2. 将 replica_data 扩展后与上述结果拼接
+        replica_expanded = np.tile(
+            replica_data[np.newaxis, :, np.newaxis],
+            (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
+        combined_data = np.concatenate([service_config, replica_expanded],
+                                       axis=2)  # 最终形状 (30, 28, 26)
 
         # ========== 服务数据处理 ==========
-        processed_serv = np.zeros_like(service_data)
+        processed_serv = np.zeros_like(combined_data)
         for s in range(28):  # 遍历每个服务
             # 提取特征 (10,24)
-            features = service_data[:, s, :24]
+            features = service_data[:, s, :25]
             scaled = self.scalers["service"][s].transform(
                 features)  # 输入 (10,24)
-
-            # 回填数据
-            processed_serv[:, s, :24] = scaled
-            processed_serv[:, s, 24] = service_data[:, s, 24]  # 副本数不变
+            processed_serv[:, s, :25] = scaled
+        # 保留第26个特征（replica_data）不归一化
+        processed_serv[:, s, 25] = combined_data[:, s, 25]
 
         # ========== 延迟数据处理 ==========
         processed_lat = self.scalers["latency"].transform(
-            latency_data)  # 输入 (10,5)
+            latency_data)  # 输入 (10,6)
 
-        return processed_serv, processed_lat  # 形状 (10,28,25), (10,5)
+        return processed_serv, processed_lat  # 形状 (30, 28, 26), (30, 6)
 
-    async def step(self, action):
-        """异步执行环境步"""
-        # 1. 执行动作
-        await self._execute_action(action)
+    def step(self, action):
+        """执行一个环境步骤
+        
+        Args:
+            action: 要执行的动作索引
+            
+        Returns:
+            stacked_state: 当前状态 (30,28,26)
+            reward: 奖励值
+            done: 是否结束
+        """
+        # 1. 执行动作 会更新self.allocate_dict
+        self._execute_action(action)
 
         # 2. 采集新数据
-        gathered, latency = await self.gather_data()
+        gathered, latency = self.gather_data()  #返回(28, 24) 和(6,)
         self.buffer.append(gathered)
         self.latency_buffer.append(latency)
+        self.config_buffer.append(
+            self.convert_to_ndarray(deepcopy(self.allocate_dict)))
+
         stacked_state, stacked_latency = self.get_state_and_latency()
         # 添加批次维度
         state_batch = np.expand_dims(stacked_state,
-                                     axis=0)  # shape (1,10,28,25)
+                                     axis=0)  # shape (1,30,28,26)
         latency_batch = np.expand_dims(stacked_latency,
-                                       axis=0)  # shape (1,10,5)
+                                       axis=0)  # shape (1,30,6)
 
         # 得到预测概率
         pv = 0
@@ -382,7 +437,7 @@ class Env:
                 done = True
         return stacked_state, reward, done
 
-    async def _execute_action(self, action):
+    def _execute_action(self, action):
         """执行资源分配动作"""
         action_type = self.actions[action]["type"]
         action_value = self.actions[action]["value"]
