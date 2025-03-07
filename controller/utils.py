@@ -40,7 +40,7 @@ class DynamicServiceEncoder(nn.Module):
 class Q_Net(nn.Module):
     """适应动态服务数量的Q网络"""
 
-    def __init__(self, num_actions=5, time_steps=10):
+    def __init__(self, num_actions=5, time_steps=30):
         super().__init__()
         # 服务编码器
         self.encoder = DynamicServiceEncoder()
@@ -128,7 +128,7 @@ class ReplayBuffer:
             buffer_size: int = 100000,
             service_shape: Tuple[int, int, int] = (30, 28, 26),  # (时间步, 服务数, 特征)
             latency_shape: Tuple[int, int] = (30, 6),  # (时间步, 延迟指标)
-            num_actions: int = 5,
+            num_actions: int = 8,
     ):
         """
         参数:

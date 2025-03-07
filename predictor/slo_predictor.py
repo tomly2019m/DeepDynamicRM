@@ -34,13 +34,6 @@ print("gathered:", np.isnan(gathered).any())
 print("latency:", np.isnan(latency).any())
 print("replicas:", np.isnan(replicas).any())
 
-nan_rows = np.isnan(latency).any(axis=1)
-valid_indices = ~nan_rows  # 有效时间步的掩码
-
-gathered = gathered[valid_indices]
-latency = latency[valid_indices]
-cpu_configs = cpu_configs[valid_indices]
-
 # ----------------------------------
 # 步骤2：数据完整性验证
 # ----------------------------------
@@ -61,12 +54,81 @@ print(f"数据加载成功！总时间步: {n_timesteps}")
 # ----------------------------------
 def process_gathered(gathered, replicas):
     """处理第一类数据：融合副本数量（不标准化）并对统计量标准化"""
+
+    #数据清洗
+    # 定义36个阶段的起始索引和长度
+    stage_config = [
+        # 50用户（4个阶段）
+        (0, 500),
+        (500, 500),
+        (1000, 500),
+        (1500, 500),
+        # 100用户（4个阶段）
+        (2000, 500),
+        (2500, 500),
+        (3000, 500),
+        (3500, 500),
+        # 150用户（4个阶段）
+        (4000, 500),
+        (4500, 500),
+        (5000, 500),
+        (5500, 500),
+        # 200用户（4个阶段）
+        (6000, 500),
+        (6500, 500),
+        (7000, 500),
+        (7500, 500),
+        # 250用户（4个阶段）
+        (8000, 500),
+        (8500, 500),
+        (9000, 500),
+        (9500, 500),
+        # 300用户（4个阶段）
+        (10000, 1500),
+        (11500, 1500),
+        (13000, 1500),
+        (14500, 1500),
+        # 350用户（4个阶段）
+        (16000, 1500),
+        (17500, 1500),
+        (19000, 1500),
+        (20500, 1500),
+        # 400用户（4个阶段）
+        (22000, 1500),
+        (23500, 1500),
+        (25000, 1500),
+        (26500, 1500),
+        # 450用户（4个阶段）
+        (28000, 1500),
+        (29500, 1500),
+        (31000, 1500),
+        (32500, 1500)
+    ]
+    # 生成需要删除的索引列表
+    remove_indices = []
+    for start_idx, _ in stage_config:
+        remove_indices.extend(range(start_idx, start_idx + 9))
+    # 创建保留掩码
+    n_samples = gathered.shape[0]
+    mask = np.ones(n_samples, dtype=bool)
+    mask[remove_indices] = False
+    # 应用清洗
+    gathered = gathered[mask]
+    latency = latency[mask]
+    cpu_configs = cpu_configs[mask]
+    # 验证结果
+    print(f"原始数据量: {n_samples}")
+    print(f"清洗后数据量: {len(gathered)}")
+    print(f"删除数据量: {n_samples - len(gathered)}")
+
     n_timesteps = gathered.shape[0]
 
     # 展平最后两个维度 (n,28,6,4) → (n,28,24)
     flattened = gathered.reshape(n_timesteps, 28, -1)
 
     replicas = np.log1p(replicas)  # 加1避免log(0)
+
+    cpu_configs_expanded = cpu_configs[:, :, np.newaxis].astype(np.float32)  # 添加新轴 → (n,28,1)
 
     # 直接广播原始副本数（不标准化）到所有时间步：(28,) → (n,28,1)
     replicas_expanded = np.tile(
@@ -75,9 +137,7 @@ def process_gathered(gathered, replicas):
     ).astype(np.float32)  # 统一数据类型
 
     # 拼接特征 → (n,28,26)
-
-    merged = np.concatenate([flattened, cpu_configs, replicas_expanded],
-                            axis=-1)
+    merged = np.concatenate([flattened, cpu_configs_expanded, replicas_expanded], axis=-1)
 
     # 仅对前25列（统计量）进行服务级标准化
     service_scalers = []
@@ -90,10 +150,7 @@ def process_gathered(gathered, replicas):
     return merged, service_scalers
 
 
-def process_data(window_size=30,
-                 pred_window=5,
-                 threshold=500,
-                 save_scalers=True):
+def process_data(window_size=30, pred_window=5, threshold=500, save_scalers=True):
     """
     处理时序数据生成带滑动窗口的训练数据集
     
@@ -130,54 +187,104 @@ def process_data(window_size=30,
     latency_scaler = StandardScaler()
     X_latency = latency_scaler.fit_transform(latency)
 
-    # ----------------------------------
-    # 生成所有有效样本（全局处理）
-    # ----------------------------------
-    def create_full_dataset(X_serv, X_lat, raw_lat):
+    def create_stage_samples(X_serv, X_lat, raw_lat, window_size=30, pred_window=5):
         samples_serv = []
         samples_lat = []
         labels = []
 
-        n_timesteps = X_serv.shape[0]
+        cleaned_stage_boundaries = [
+            # 50用户（4个阶段）
+            (0, 490),
+            (491, 981),
+            (982, 1472),
+            (1473, 1963),
+            # 100用户（4个阶段）
+            (1964, 2454),
+            (2455, 2945),
+            (2946, 3436),
+            (3437, 3927),
+            # 150用户（4个阶段）
+            (3928, 4418),
+            (4419, 4909),
+            (4910, 5400),
+            (5401, 5891),
+            # 200用户（4个阶段）
+            (5892, 6382),
+            (6383, 6873),
+            (6874, 7364),
+            (7365, 7855),
+            # 250用户（4个阶段）
+            (7856, 8346),
+            (8347, 8837),
+            (8838, 9328),
+            (9329, 9819),
+            # 300用户（4个阶段）
+            (9820, 11310),
+            (11311, 12801),
+            (12802, 14292),
+            (14293, 15783),
+            # 350用户（4个阶段）
+            (15784, 17274),
+            (17275, 18765),
+            (18766, 20256),
+            (20257, 21747),
+            # 400用户（4个阶段）
+            (21748, 23238),
+            (23239, 24729),
+            (24730, 26220),
+            (26221, 27711),
+            # 450用户（4个阶段）
+            (27712, 29202),
+            (29203, 30693),
+            (30694, 32184),
+            (32185, 33675)
+        ]
 
-        # 遍历所有可能的起始点（确保预测窗口不越界）
-        for i in range(window_size, n_timesteps - pred_window + 1):
-            # 输入窗口：i-window_size 到 i-1
-            serv_window = X_serv[i - window_size:i]  # (window_size, 28, 26)
-            lat_window = X_lat[i - window_size:i]  # (window_size, 6)
+        for stage_start, stage_end in cleaned_stage_boundaries:
+            # 跳过长度不足的阶段
+            if (stage_end - stage_start + 1) < (window_size + pred_window):
+                continue
 
-            # 预测窗口：i 到 i+pred_window-1
-            pred_values = raw_lat[i:i + pred_window, percentile_idx]
+            # 阶段内数据范围
+            stage_serv = X_serv[stage_start:stage_end + 1]  # +1因end是闭区间
+            stage_lat = X_lat[stage_start:stage_end + 1]
+            stage_raw = raw_lat[stage_start:stage_end + 1]
 
-            # 生成标签：未来的P99延迟极值是否超过阈值
-            max_p99 = np.mean(pred_values)
-            # 手动分类逻辑
-            if max_p99 <= 100:
+            # 生成该阶段的样本
+            for i in range(window_size, len(stage_serv) - pred_window + 1):
+                # 服务特征窗口 (window_size, 28, 26)
+                serv_window = stage_serv[i - window_size:i]
+
+                # 延迟特征窗口 (window_size, 6)
+                lat_window = stage_lat[i - window_size:i]
+
+                # 预测窗口的P99延迟 (pred_window,)
+                pred_values = stage_raw[i:i + pred_window, percentile_idx]
+
+                # 生成分类标签
+                max_p99 = np.max(pred_values)
                 label = 0
-            elif max_p99 <= 200:
-                label = 1
-            elif max_p99 <= 300:
-                label = 2
-            elif max_p99 <= 400:
-                label = 3
-            elif max_p99 <= 500:
-                label = 4
-            else:
-                label = 5
+                if max_p99 <= 100:
+                    label = 0
+                elif max_p99 <= 200:
+                    label = 1
+                elif max_p99 <= 300:
+                    label = 2
+                elif max_p99 <= 400:
+                    label = 3
+                elif max_p99 <= 500:
+                    label = 4
+                else:
+                    label = 5
 
-            samples_serv.append(serv_window)
-            samples_lat.append(lat_window)
-            labels.append(label)
+                samples_serv.append(serv_window)
+                samples_lat.append(lat_window)
+                labels.append(label)
 
-        return (
-            np.array(samples_serv),  # (num_samples, window_size, 28, 25)
-            np.array(samples_lat),  # (num_samples, window_size, 5)
-            np.array(labels)  # (num_samples,)
-        )
+        return (np.array(samples_serv), np.array(samples_lat), np.array(labels))
 
     # 生成所有样本
-    X_serv_all, X_lat_all, y_all = create_full_dataset(X_service, X_latency,
-                                                       raw_latency)
+    X_serv_all, X_lat_all, y_all = create_stage_samples(X_service, X_latency, raw_latency)
 
     # ----------------------------------
     # 按时间顺序划分数据集（样本已有序）
@@ -235,9 +342,8 @@ def process_data(window_size=30,
         joblib.dump(latency_scaler, latency_scaler_path)
         print(f"保存延迟标准化器至 {latency_scaler_path}")
 
-    return ((X_train_serv, X_train_lat, y_train), (X_val_serv, X_val_lat,
-                                                   y_val),
-            (X_test_serv, X_test_lat, y_test), service_scalers, latency_scaler)
+    return ((X_train_serv, X_train_lat, y_train), (X_val_serv, X_val_lat, y_val), (X_test_serv, X_test_lat, y_test),
+            service_scalers, latency_scaler)
 
 
 class ServiceBranch(nn.Module):
@@ -258,13 +364,8 @@ class ServiceBranch(nn.Module):
 
         # 多尺度卷积网络
         self.conv_blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv1d(feature_dim,
-                          conv_channels,
-                          kernel_size=k,
-                          padding=k // 2), nn.BatchNorm1d(conv_channels),
-                nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i)))
-            for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
+            nn.Sequential(nn.Conv1d(feature_dim, conv_channels, kernel_size=k, padding=k // 2), nn.BatchNorm1d(conv_channels),
+                          nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i))) for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
         ])
 
         # 时空LSTM编码器
@@ -276,23 +377,13 @@ class ServiceBranch(nn.Module):
 
         # 层次化注意力机制
         if 'hier' in mode:
-            self.temporal_attn = nn.MultiheadAttention(embed_dim=2 *
-                                                       lstm_hidden,
-                                                       num_heads=attn_heads,
-                                                       batch_first=True)
-            self.service_attn = nn.MultiheadAttention(embed_dim=2 *
-                                                      lstm_hidden,
-                                                      num_heads=attn_heads,
-                                                      batch_first=True)
+            self.temporal_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden, num_heads=attn_heads, batch_first=True)
+            self.service_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden, num_heads=attn_heads, batch_first=True)
         else:
-            self.fusion = nn.Sequential(
-                nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(),
-                nn.Linear(512, lstm_hidden))
+            self.fusion = nn.Sequential(nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(), nn.Linear(512, lstm_hidden))
 
         # 残差连接
-        self.residual = nn.Sequential(
-            nn.Conv1d(feature_dim, 2 * lstm_hidden, 1),
-            nn.BatchNorm1d(2 * lstm_hidden))
+        self.residual = nn.Sequential(nn.Conv1d(feature_dim, 2 * lstm_hidden, 1), nn.BatchNorm1d(2 * lstm_hidden))
 
         # 最终投影
         self.proj = nn.Linear(2 * lstm_hidden, lstm_hidden)
@@ -329,8 +420,7 @@ class ServiceBranch(nn.Module):
         # 注意力融合 ----------------------------
         if 'hier' in self.mode:
             # 时间维度注意力
-            temporal_attn, _ = self.temporal_attn(lstm_out, lstm_out,
-                                                  lstm_out)  # (B*S, T', 2H)
+            temporal_attn, _ = self.temporal_attn(lstm_out, lstm_out, lstm_out)  # (B*S, T', 2H)
 
             # 服务维度注意力 (B, S, T', 2H)
             temporal_attn = temporal_attn.view(B, S, -1, 2 * self.lstm_hidden)
@@ -351,19 +441,12 @@ class ServiceBranch(nn.Module):
 class LatencyBranch(nn.Module):
     """处理延迟数据的增强模块，使用时间序列全局信息"""
 
-    def __init__(self,
-                 input_dim=6,
-                 time_steps=30,
-                 lstm_hidden=64,
-                 use_attention=True):
+    def __init__(self, input_dim=6, time_steps=30, lstm_hidden=64, use_attention=True):
         super().__init__()
         self.use_attention = use_attention
 
         # 时序特征提取
-        self.lstm = nn.LSTM(input_size=input_dim,
-                            hidden_size=lstm_hidden,
-                            batch_first=True,
-                            bidirectional=True)  # 使用双向LSTM
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=lstm_hidden, batch_first=True, bidirectional=True)  # 使用双向LSTM
 
         # 注意力机制
         if self.use_attention:
@@ -515,8 +598,7 @@ class SLOTrainer:
         self.model = self._init_model(service_mode).to(self.device)
 
         # 损失函数修改为CrossEntropyLoss
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(
-            self.device) if class_weights is not None else None)
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(self.device) if class_weights is not None else None)
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
         self.scaler_manager = None
@@ -593,13 +675,9 @@ class SLOTrainer:
         self.test_dataset = self.SLODataset(*test_data)
 
         # 创建加载器
-        self.train_loader = DataLoader(self.train_dataset,
-                                       batch_size=self.batch_size,
-                                       shuffle=True)
-        self.val_loader = DataLoader(self.val_dataset,
-                                     batch_size=self.batch_size)
-        self.test_loader = DataLoader(self.test_dataset,
-                                      batch_size=self.batch_size)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size)
 
     def train(self, epochs=5000, early_stop=5000):
         """使用验证集准确率作为早停标准"""
@@ -657,8 +735,7 @@ def predict_example():
     model.eval()
 
     # 加载标准化器
-    service_scalers = joblib.load(
-        f"{save_dir}/service_scalers.pkl")  # 28个StandardScaler
+    service_scalers = joblib.load(f"{save_dir}/service_scalers.pkl")  # 28个StandardScaler
     latency_scaler = joblib.load(f"{save_dir}/latency_scaler.pkl")
 
     # 维护新增服务的scaler {service_id: OnlineScaler}
@@ -676,18 +753,14 @@ def predict_example():
             # 提取特征 (1,10,24)
             features = gathered[:, :, s, :24].reshape(-1, 24)
             # 使用预训练scaler
-            processed_serv[:, :, s, :24] = service_scalers[s].transform(
-                features).reshape(1, 10, 24)
+            processed_serv[:, :, s, :24] = service_scalers[s].transform(features).reshape(1, 10, 24)
 
         # 预处理延迟数据
-        processed_lat = latency_scaler.transform(latency.reshape(-1,
-                                                                 5)).reshape(
-                                                                     1, 10, 5)
+        processed_lat = latency_scaler.transform(latency.reshape(-1, 5)).reshape(1, 10, 5)
 
         # 转换为Tensor并预测
         with torch.no_grad():
-            prob = model(torch.FloatTensor(processed_serv),
-                         torch.FloatTensor(processed_lat)).item()
+            prob = model(torch.FloatTensor(processed_serv), torch.FloatTensor(processed_lat)).item()
 
         print("\n案例1：正常输入")
         print(f"输入形状: 服务数据 {gathered.shape}, 延迟数据 {latency.shape}")
@@ -704,8 +777,7 @@ def predict_example():
         # 处理前28个服务
         for s in range(28):
             features = gathered[:, :, s, :24].reshape(-1, 24)
-            processed_serv[:, :, s, :24] = service_scalers[s].transform(
-                features).reshape(1, 10, 24)
+            processed_serv[:, :, s, :24] = service_scalers[s].transform(features).reshape(1, 10, 24)
 
         # 处理新增服务（第29个）
         s = 28  # 索引从0开始，28对应第29个服务
@@ -718,18 +790,14 @@ def predict_example():
 
         # 在线更新并转换
         scaler.partial_fit(features)
-        processed_serv[:, :,
-                       s, :24] = scaler.transform(features).reshape(1, 10, 24)
+        processed_serv[:, :, s, :24] = scaler.transform(features).reshape(1, 10, 24)
 
         # 处理延迟数据
-        processed_lat = latency_scaler.transform(latency.reshape(-1,
-                                                                 5)).reshape(
-                                                                     1, 10, 5)
+        processed_lat = latency_scaler.transform(latency.reshape(-1, 5)).reshape(1, 10, 5)
 
         # 预测
         with torch.no_grad():
-            prob = model(torch.FloatTensor(processed_serv),
-                         torch.FloatTensor(processed_lat)).item()
+            prob = model(torch.FloatTensor(processed_serv), torch.FloatTensor(processed_lat)).item()
 
         print("\n案例2：新增服务输入")
         print(f"输入形状: 服务数据 {gathered.shape}, 延迟数据 {latency.shape}")
@@ -750,15 +818,12 @@ def analyze_feature_importance(model, sample):
 
 def main():
     # 数据预处理
-    train_data, val_data, test_data, service_scalers, latency_scaler = process_data(
-        window_size=30, pred_window=5, threshold=500)
+    train_data, val_data, test_data, service_scalers, latency_scaler = process_data(window_size=30, pred_window=5, threshold=500)
 
     # 计算类别权重（处理不平衡数据）
     from sklearn.utils.class_weight import compute_class_weight
     _, _, y_train = train_data
-    class_weights = compute_class_weight('balanced',
-                                         classes=np.arange(6),
-                                         y=y_train)
+    class_weights = compute_class_weight('balanced', classes=np.arange(6), y=y_train)
     class_weights = torch.tensor(class_weights, dtype=torch.float32)
 
     # 初始化训练器
@@ -796,8 +861,7 @@ def main():
 
     # 可选：特征重要性分析
     if torch.cuda.is_available():
-        sample_data = (trainer.test_dataset[0][0].unsqueeze(0).cuda(),
-                       trainer.test_dataset[0][1].unsqueeze(0).cuda())
+        sample_data = (trainer.test_dataset[0][0].unsqueeze(0).cuda(), trainer.test_dataset[0][1].unsqueeze(0).cuda())
         analyze_feature_importance(trainer.model, sample_data)
 
 
