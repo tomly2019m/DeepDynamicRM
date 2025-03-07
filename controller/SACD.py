@@ -13,37 +13,26 @@ class SACD_agent:
         self.__dict__.update(kwargs)
         self.tau = 0.005
         self.H_mean = 0
-        self.replay_buffer = ReplayBuffer(self.state_dim,
-                                          self.dvc,
-                                          max_size=int(1e6))
+        self.replay_buffer = ReplayBuffer(self.state_dim, self.dvc, max_size=int(1e6))
 
-        self.actor = Policy_Net(self.state_dim, self.action_dim,
-                                self.hid_shape).to(self.dvc)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),
-                                                lr=self.lr)
+        self.actor = Policy_Net(self.state_dim, self.action_dim, self.hid_shape).to(self.dvc)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
 
-        self.q_critic = Double_Q_Net(self.state_dim, self.action_dim,
-                                     self.hid_shape).to(self.dvc)
-        self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(),
-                                                   lr=self.lr)
+        self.q_critic = Double_Q_Net(self.state_dim, self.action_dim, self.hid_shape).to(self.dvc)
+        self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=self.lr)
         self.q_critic_target = copy.deepcopy(self.q_critic)
         for p in self.q_critic_target.parameters():
             p.requires_grad = False
 
         if self.adaptive_alpha:
             # We use 0.6 because the recommended 0.98 will cause alpha explosion.
-            self.target_entropy = 0.6 * (-np.log(1 / self.action_dim)
-                                         )  # H(discrete)>0
-            self.log_alpha = torch.tensor(np.log(self.alpha),
-                                          dtype=float,
-                                          requires_grad=True,
-                                          device=self.dvc)
+            self.target_entropy = 0.6 * (-np.log(1 / self.action_dim))  # H(discrete)>0
+            self.log_alpha = torch.tensor(np.log(self.alpha), dtype=float, requires_grad=True, device=self.dvc)
             self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=self.lr)
 
     def select_action(self, state, deterministic):
         with torch.no_grad():
-            state = torch.FloatTensor(state[np.newaxis, :]).to(
-                self.dvc)  # from (s_dim,) to (1, s_dim)
+            state = torch.FloatTensor(state[np.newaxis, :]).to(self.dvc)  # from (s_dim,) to (1, s_dim)
             probs = self.actor(state)
             if deterministic:
                 a = probs.argmax(-1).item()
@@ -59,8 +48,7 @@ class SACD_agent:
         with torch.no_grad():
             next_probs = self.actor(s_next)  # [b,a_dim]
             next_log_probs = torch.log(next_probs + 1e-8)  # [b,a_dim]
-            next_q1_all, next_q2_all = self.q_critic_target(
-                s_next)  # [b,a_dim]
+            next_q1_all, next_q2_all = self.q_critic_target(s_next)  # [b,a_dim]
             min_next_q_all = torch.min(next_q1_all, next_q2_all)
             v_next = torch.sum(
                 next_probs * (min_next_q_all - self.alpha * next_log_probs),
@@ -83,9 +71,7 @@ class SACD_agent:
             q1_all, q2_all = self.q_critic(s)  # [b,a_dim]
         min_q_all = torch.min(q1_all, q2_all)
 
-        a_loss = torch.sum(probs * (self.alpha * log_probs - min_q_all),
-                           dim=1,
-                           keepdim=False)  # [b,]
+        a_loss = torch.sum(probs * (self.alpha * log_probs - min_q_all), dim=1, keepdim=False)  # [b,]
 
         self.actor_optimizer.zero_grad()
         a_loss.mean().backward()
@@ -104,21 +90,13 @@ class SACD_agent:
             self.alpha = self.log_alpha.exp().item()
 
         # ------------------------------------------ Update Target Net ----------------------------------#
-        for param, target_param in zip(self.q_critic.parameters(),
-                                       self.q_critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data +
-                                    (1 - self.tau) * target_param.data)
+        for param, target_param in zip(self.q_critic.parameters(), self.q_critic_target.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
     def save(self, timestep, EnvName):
-        torch.save(self.actor.state_dict(),
-                   f"./model/sacd_actor_{timestep}_{EnvName}.pth")
-        torch.save(self.q_critic.state_dict(),
-                   f"./model/sacd_critic_{timestep}_{EnvName}.pth")
+        torch.save(self.actor.state_dict(), f"./model/sacd_actor_{timestep}_{EnvName}.pth")
+        torch.save(self.q_critic.state_dict(), f"./model/sacd_critic_{timestep}_{EnvName}.pth")
 
     def load(self, timestep, EnvName):
-        self.actor.load_state_dict(
-            torch.load(f"./model/sacd_actor_{timestep}_{EnvName}.pth",
-                       map_location=self.dvc))
-        self.q_critic.load_state_dict(
-            torch.load(f"./model/sacd_critic_{timestep}_{EnvName}.pth",
-                       map_location=self.dvc))
+        self.actor.load_state_dict(torch.load(f"./model/sacd_actor_{timestep}_{EnvName}.pth", map_location=self.dvc))
+        self.q_critic.load_state_dict(torch.load(f"./model/sacd_critic_{timestep}_{EnvName}.pth", map_location=self.dvc))

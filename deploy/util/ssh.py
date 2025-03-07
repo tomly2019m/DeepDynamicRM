@@ -25,11 +25,7 @@ def setup_ssh_multiplexing(host: str, username: str):
     return control_path
 
 
-def execute_command_via_system_ssh(host: str,
-                                   username: str,
-                                   command: str,
-                                   async_exec: bool = False,
-                                   stream_output: bool = False):
+def execute_command_via_system_ssh(host: str, username: str, command: str, async_exec: bool = False, stream_output: bool = False):
     """
     使用系统 ssh 命令执行远程命令（使用连接复用）
     
@@ -45,29 +41,17 @@ def execute_command_via_system_ssh(host: str,
 
     if stream_output:
         # 实时输出模式, 输出到标准输出
-        result = subprocess.run(ssh_command,
-                                shell=True,
-                                stdout=sys.stdout,
-                                stderr=sys.stderr)
+        result = subprocess.run(ssh_command, shell=True, stdout=sys.stdout, stderr=sys.stderr)
         return None, None
 
     elif async_exec:
         # 异步执行模式
-        process = subprocess.Popen(ssh_command,
-                                   shell=True,
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE,
-                                   text=True)
+        process = subprocess.Popen(ssh_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return process
     else:
         # 同步执行模式
         try:
-            result = subprocess.run(ssh_command,
-                                    shell=True,
-                                    check=True,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    text=True)
+            result = subprocess.run(ssh_command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             return result.stdout, result.stderr
         except subprocess.CalledProcessError as e:
             print(f"系统 SSH 执行失败: {e.stderr}")
@@ -155,10 +139,7 @@ def test_long_running_command():
     command = "for i in {1..10}; do echo $i; sleep 1; done"
 
     print("开始执行长时间运行的命令...")
-    output, error = execute_command_via_system_ssh(host=host,
-                                                   username=username,
-                                                   command=command,
-                                                   stream_output=True)
+    output, error = execute_command_via_system_ssh(host=host, username=username, command=command, stream_output=True)
     print("命令执行完成！")
 
 

@@ -45,8 +45,7 @@ class Q_Net(nn.Module):
         # 服务编码器
         self.encoder = DynamicServiceEncoder()
         # 动作价值头
-        self.q_head = nn.Sequential(nn.Linear(64, 32), nn.ReLU(),
-                                    nn.Linear(32, num_actions))
+        self.q_head = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, num_actions))
 
     def forward(self, state):
         """
@@ -143,11 +142,8 @@ class ReplayBuffer:
         assert num_services == 28, "仅支持28个服务的配置"
 
         # 预分配内存 (优化内存访问模式)
-        self.states = np.zeros(
-            (buffer_size, state_window, num_services, state_features),
-            dtype=np.float32)  # 状态序列
-        self.actions = np.zeros(buffer_size,
-                                dtype=np.int64)  # 动作索引 (0~num_actions-1)
+        self.states = np.zeros((buffer_size, state_window, num_services, state_features), dtype=np.float32)  # 状态序列
+        self.actions = np.zeros(buffer_size, dtype=np.int64)  # 动作索引 (0~num_actions-1)
         self.rewards = np.zeros(buffer_size, dtype=np.float32)  # 即时奖励
         self.next_states = np.zeros_like(self.states)  # 下一状态
         self.dones = np.zeros(buffer_size, dtype=np.bool_)  # 终止标志
@@ -183,38 +179,27 @@ class ReplayBuffer:
         self.current_idx = (idx + 1) % self.buffer_size
         self.current_size = min(self.current_size + 1, self.buffer_size)
 
-    def sample_batch(
-        self, batch_size: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-               torch.Tensor]:
+    def sample_batch(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """采样训练批次"""
-        indices = np.random.choice(self.current_size,
-                                   batch_size,
-                                   replace=False)
+        indices = np.random.choice(self.current_size, batch_size, replace=False)
 
         return (
             torch.FloatTensor(self.states[indices]),  # (B,10,28,25)
             torch.LongTensor(self.actions[indices]),  # (B,)
             torch.FloatTensor(self.rewards[indices]).unsqueeze(1),  # (B,1)
             torch.FloatTensor(self.next_states[indices]),  # (B,10,28,25)
-            torch.FloatTensor(self.dones[indices].astype(
-                np.float32)).unsqueeze(1),  # (B,1)
+            torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1),  # (B,1)
         )
 
-    def _validate_shape(self, data: np.ndarray, expected_shape: tuple,
-                        name: str):
+    def _validate_shape(self, data: np.ndarray, expected_shape: tuple, name: str):
         """验证状态数据维度"""
         if data.shape != expected_shape:
-            raise ValueError(
-                f"Invalid {name} shape. Expected: {expected_shape}, Got: {data.shape}"
-            )
+            raise ValueError(f"Invalid {name} shape. Expected: {expected_shape}, Got: {data.shape}")
 
     def _validate_scalar(self, value: int, name: str):
         """验证动作是否为标量"""
         if not (0 <= value < self.num_actions):
-            raise ValueError(
-                f"{name} index out of range. Max allowed: {self.num_actions - 1}"
-            )
+            raise ValueError(f"{name} index out of range. Max allowed: {self.num_actions - 1}")
 
     @property
     def num_actions(self) -> int:

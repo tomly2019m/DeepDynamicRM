@@ -51,10 +51,7 @@ def distribute_project(username: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--username",
-                        type=str,
-                        default="tomly",
-                        help="SSH登录用户名（所有节点需相同）")
+    parser.add_argument("--username", type=str, default="tomly", help="SSH登录用户名（所有节点需相同）")
     args = parser.parse_args()
 
     distribute_project(args.username)

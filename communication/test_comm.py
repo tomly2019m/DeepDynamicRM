@@ -32,8 +32,7 @@ class SlaveConnection:
         if self.socket:
             self.socket.sendall(command.encode())
             data = self.socket.recv(20480)
-            print(f"Received from {self.slave_host}:{self.slave_port}:",
-                  data.decode())
+            print(f"Received from {self.slave_host}:{self.slave_port}:", data.decode())
             return data.decode()
 
     def close(self):

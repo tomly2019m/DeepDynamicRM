@@ -30,8 +30,7 @@ class Env:
 
         self.config_path = f"{PROJECT_ROOT}/communication/comm.json"
         # 读取配置文件
-        self.master, self.slaves, self.port = self._load_config(
-            self.config_path)
+        self.master, self.slaves, self.port = self._load_config(self.config_path)
 
         self.username = "tomly"
         self._setup_slaves()
@@ -105,8 +104,7 @@ class Env:
         """
         从配置文件中加载并生成 allocate_dict 和 replica_dict，初始化初始分配字典，初始化默认cpu配置
         """
-        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config",
-                                        "socialnetwork.json")
+        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "socialnetwork.json")
 
         try:
             with open(config_file_path, "r") as f:
@@ -126,17 +124,13 @@ class Env:
             # 自动生成 allocate_dict 和 replica_dict
             for service_name, service_conf in self.default_cpu_config.items():
                 # CPU分配：直接使用配置中的 cpus 字段
-                self.allocate_dict[service_name] = service_conf.get(
-                    "cpus", 0.0)
+                self.allocate_dict[service_name] = service_conf.get("cpus", 0.0)
                 self.initial_allocation = deepcopy(self.allocate_dict)
 
                 # 副本数：使用配置中的 replica 字段
-                self.replica_dict[service_name] = service_conf.get(
-                    "replica", 1)
+                self.replica_dict[service_name] = service_conf.get("replica", 1)
 
-            replica_list = [
-                self.replica_dict.get(service, 1) for service in services
-            ]
+            replica_list = [self.replica_dict.get(service, 1) for service in services]
             self.replica_ndarray = np.array(replica_list)
 
             print(f"已自动生成初始分配：{len(self.allocate_dict)} 个服务的CPU配置")
@@ -234,8 +228,7 @@ class Env:
         config_path = Path(PROJECT_ROOT) / "controller" / "reward.json"
         with open(config_path, 'r') as f:
             config = json.load(f)
-            self.w1, self.w2, self.w3, self.w4 = config["w1"], config[
-                "w2"], config["w3"], config["w4"]
+            self.w1, self.w2, self.w3, self.w4 = config["w1"], config["w2"], config["w3"], config["w4"]
             self.pv = config["pv"]
             self.threshold = config["threshold"]
 
@@ -276,8 +269,7 @@ class Env:
 
     def _load_predictor(self):
         """加载预测器"""
-        model_path = Path(
-            PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
+        model_path = Path(PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
         self.predictor.load_state_dict(torch.load(model_path))
         self.predictor.eval()
 
@@ -297,13 +289,10 @@ class Env:
                     modify = True
                     break
                 data_dict = json.loads(result)
-                gathered["cpu"] = concat_data(gathered["cpu"],
-                                              data_dict["cpu"])
-                gathered["memory"] = concat_data(gathered["memory"],
-                                                 data_dict["memory"])
+                gathered["cpu"] = concat_data(gathered["cpu"], data_dict["cpu"])
+                gathered["memory"] = concat_data(gathered["memory"], data_dict["memory"])
                 gathered["io"] = concat_data(gathered["io"], data_dict["io"])
-                gathered["network"] = concat_data(gathered["network"],
-                                                  data_dict["network"])
+                gathered["network"] = concat_data(gathered["network"], data_dict["network"])
             if not modify:
                 break
 
@@ -348,8 +337,7 @@ class Env:
             self.latency_buffer.append(latency)
 
             # 配置列表预填充最初的配置
-            self.config_buffer.append(
-                self.convert_to_ndarray(self.initial_allocation))
+            self.config_buffer.append(self.convert_to_ndarray(self.initial_allocation))
 
             time.sleep(1)
             countdown -= 1
@@ -365,30 +353,24 @@ class Env:
         # ========== 特征拼接 ==========
         # 1. 将 config_data 扩展维度后与 service_data 拼接
         config_expanded = config_data[..., np.newaxis]  # 形状 (30, 28, 1)
-        service_config = np.concatenate([service_data, config_expanded],
-                                        axis=2)  # 形状 (30, 28, 25)
+        service_config = np.concatenate([service_data, config_expanded], axis=2)  # 形状 (30, 28, 25)
 
         # 2. 将 replica_data 扩展后与上述结果拼接
-        replica_expanded = np.tile(
-            replica_data[np.newaxis, :, np.newaxis],
-            (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
-        combined_data = np.concatenate([service_config, replica_expanded],
-                                       axis=2)  # 最终形状 (30, 28, 26)
+        replica_expanded = np.tile(replica_data[np.newaxis, :, np.newaxis], (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
+        combined_data = np.concatenate([service_config, replica_expanded], axis=2)  # 最终形状 (30, 28, 26)
 
         # ========== 服务数据处理 ==========
         processed_serv = np.zeros_like(combined_data)
         for s in range(28):  # 遍历每个服务
             # 提取特征 (10,24)
             features = service_data[:, s, :25]
-            scaled = self.scalers["service"][s].transform(
-                features)  # 输入 (10,24)
+            scaled = self.scalers["service"][s].transform(features)  # 输入 (10,24)
             processed_serv[:, s, :25] = scaled
         # 保留第26个特征（replica_data）不归一化
         processed_serv[:, s, 25] = combined_data[:, s, 25]
 
         # ========== 延迟数据处理 ==========
-        processed_lat = self.scalers["latency"].transform(
-            latency_data)  # 输入 (10,6)
+        processed_lat = self.scalers["latency"].transform(latency_data)  # 输入 (10,6)
 
         return processed_serv, processed_lat  # 形状 (30, 28, 26), (30, 6)
 
@@ -410,21 +392,17 @@ class Env:
         gathered, latency = self.gather_data()  #返回(28, 24) 和(6,)
         self.buffer.append(gathered)
         self.latency_buffer.append(latency)
-        self.config_buffer.append(
-            self.convert_to_ndarray(deepcopy(self.allocate_dict)))
+        self.config_buffer.append(self.convert_to_ndarray(deepcopy(self.allocate_dict)))
 
         stacked_state, stacked_latency = self.get_state_and_latency()
         # 添加批次维度
-        state_batch = np.expand_dims(stacked_state,
-                                     axis=0)  # shape (1,30,28,26)
-        latency_batch = np.expand_dims(stacked_latency,
-                                       axis=0)  # shape (1,30,6)
+        state_batch = np.expand_dims(stacked_state, axis=0)  # shape (1,30,28,26)
+        latency_batch = np.expand_dims(stacked_latency, axis=0)  # shape (1,30,6)
 
         # 得到预测概率
         pv = 0
         with torch.no_grad():
-            pv = self.predictor(torch.FloatTensor(state_batch),
-                                torch.FloatTensor(latency_batch)).item()
+            pv = self.predictor(torch.FloatTensor(state_batch), torch.FloatTensor(latency_batch)).item()
 
         p99_latency = latency[-2]
         reward = self._calculate_reward(pv, p99_latency)
@@ -457,8 +435,7 @@ class Env:
             # 找到负载最高的服务增加资源
             target_service = max(load, key=lambda k: load[k])
             new_cpu = self.allocate_dict[target_service] + action["value"]
-            new_cpu = min(new_cpu,
-                          self.default_cpu_config[target_service]["max_cpus"])
+            new_cpu = min(new_cpu, self.default_cpu_config[target_service]["max_cpus"])
             new_allocation[target_service] = new_cpu
 
         elif action_type == "decrease":
@@ -481,8 +458,7 @@ class Env:
         elif action_type == "decrease_batch":
             candidates = self.scalable_service
             for service in candidates:
-                new_allocation[service] = max(
-                    0.2, new_allocation[service] - action["value"])
+                new_allocation[service] = max(0.2, new_allocation[service] - action["value"])
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
@@ -495,8 +471,7 @@ class Env:
         elif action_type == "decrease_percent":
             # 按百分比减少低负载服务
             target_service = min(load, key=lambda k: load[k])
-            new_allocation[target_service] = max(
-                0.2, new_allocation[target_service] * (1 - action["value"]))
+            new_allocation[target_service] = max(0.2, new_allocation[target_service] * (1 - action["value"]))
 
         elif action_type == "reset":
             # 重置到初始配置

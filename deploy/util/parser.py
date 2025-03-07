@@ -14,14 +14,12 @@ def parse_swarm_output(output):
     worker_command_pattern = r"docker swarm join --token\s+([^\n]+)"
     worker_command_match = re.search(worker_command_pattern, output)
     if worker_command_match:
-        result[
-            'worker_command'] = f"docker swarm join --token {worker_command_match.group(1)}"
+        result['worker_command'] = f"docker swarm join --token {worker_command_match.group(1)}"
 
     # 使用正则表达式提取 manager 加入命令的提示
     manager_command_pattern = r"docker swarm join-token manager"
     if manager_command_pattern in output:
-        result[
-            'manager_command_hint'] = "Run 'docker swarm join-token manager' and follow the instructions."
+        result['manager_command_hint'] = "Run 'docker swarm join-token manager' and follow the instructions."
 
     return result
 
