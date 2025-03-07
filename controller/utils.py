@@ -121,89 +121,99 @@ class Policy_Net(nn.Module):
 
 
 class ReplayBuffer:
-    """经验回放池"""
+    """支持双模态状态的经验回放池"""
 
     def __init__(
-        self,
-        buffer_size: int = 100000,
-        num_services: int = 28,
-        state_window: int = 10,
-        state_features: int = 25,
-        num_actions: int = 5,
+            self,
+            buffer_size: int = 100000,
+            service_shape: Tuple[int, int, int] = (30, 28, 26),  # (时间步, 服务数, 特征)
+            latency_shape: Tuple[int, int] = (30, 6),  # (时间步, 延迟指标)
+            num_actions: int = 5,
     ):
         """
         参数:
-            buffer_size: 缓冲池最大容量
-            num_services: 固定服务数量 (必须为28)
-            state_window: 状态时间窗口 (固定为10步)
-            state_features: 每个服务的特征维度 (固定为25)
-            num_actions: 全局有限动作的数量 (例如5种策略)
+            buffer_size: 缓冲池容量
+            service_shape: 服务状态形状 (T,S,F)
+            latency_shape: 延迟状态形状 (T,L)
+            num_actions: 动作空间大小
         """
-        assert num_services == 28, "仅支持28个服务的配置"
+        # 服务状态相关存储 (性能指标)
+        self.service_states = np.zeros((buffer_size, *service_shape), dtype=np.float32)  # (buffer_size, 30,28,26)
+        self.next_service_states = np.zeros_like(self.service_states)
 
-        # 预分配内存 (优化内存访问模式)
-        self.states = np.zeros((buffer_size, state_window, num_services, state_features), dtype=np.float32)  # 状态序列
-        self.actions = np.zeros(buffer_size, dtype=np.int64)  # 动作索引 (0~num_actions-1)
-        self.rewards = np.zeros(buffer_size, dtype=np.float32)  # 即时奖励
-        self.next_states = np.zeros_like(self.states)  # 下一状态
-        self.dones = np.zeros(buffer_size, dtype=np.bool_)  # 终止标志
+        # 延迟状态相关存储
+        self.latency_states = np.zeros((buffer_size, *latency_shape), dtype=np.float32)  # (buffer_size, 30,6)
+        self.next_latency_states = np.zeros_like(self.latency_states)
+
+        # 通用存储
+        self.actions = np.zeros(buffer_size, dtype=np.int64)
+        self.rewards = np.zeros(buffer_size, dtype=np.float32)
+        self.dones = np.zeros(buffer_size, dtype=np.bool_)
 
         # 指针管理
         self.buffer_size = buffer_size
-        self.current_idx = 0  # 当前写入位置
-        self.current_size = 0  # 当前有效数据量
+        self.current_idx = 0
+        self.current_size = 0
 
     def add_experience(
         self,
-        state: np.ndarray,  # (10,28,25)
-        action: int,  # 动作索引 (标量)
+        service_state: np.ndarray,  # (30,28,26)
+        latency_state: np.ndarray,  # (30,6)
+        action: int,
         reward: float,
-        next_state: np.ndarray,  # (10,28,25)
+        next_service_state: np.ndarray,
+        next_latency_state: np.ndarray,
         done: bool,
     ) -> None:
-        """添加单条经验"""
-        # 输入数据验证
-        self._validate_shape(state, (10, 28, 25), "State")
+        """添加双模态经验"""
+        # 输入验证
+        self._validate_shape(service_state, self.service_states.shape[1:], "Service State")
+        self._validate_shape(latency_state, self.latency_states.shape[1:], "Latency State")
         self._validate_scalar(action, "Action")
-        self._validate_shape(next_state, (10, 28, 25), "Next State")
 
         # 写入存储
         idx = self.current_idx
-        self.states[idx] = state
+        self.service_states[idx] = service_state
+        self.latency_states[idx] = latency_state
         self.actions[idx] = action
         self.rewards[idx] = reward
-        self.next_states[idx] = next_state
+        self.next_service_states[idx] = next_service_state
+        self.next_latency_states[idx] = next_latency_state
         self.dones[idx] = done
 
-        # 更新环形缓冲指针
+        # 更新指针
         self.current_idx = (idx + 1) % self.buffer_size
         self.current_size = min(self.current_size + 1, self.buffer_size)
 
-    def sample_batch(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """采样训练批次"""
+    def sample_batch(
+        self, batch_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """采样批次数据"""
         indices = np.random.choice(self.current_size, batch_size, replace=False)
 
         return (
-            torch.FloatTensor(self.states[indices]),  # (B,10,28,25)
+            torch.FloatTensor(self.service_states[indices]),  # (B,30,28,26)
+            torch.FloatTensor(self.latency_states[indices]),  # (B,30,6)
             torch.LongTensor(self.actions[indices]),  # (B,)
             torch.FloatTensor(self.rewards[indices]).unsqueeze(1),  # (B,1)
-            torch.FloatTensor(self.next_states[indices]),  # (B,10,28,25)
+            torch.FloatTensor(self.next_service_states[indices]),  # (B,30,28,26)
+            torch.FloatTensor(self.next_latency_states[indices]),  # (B,30,6)
             torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1),  # (B,1)
         )
 
     def _validate_shape(self, data: np.ndarray, expected_shape: tuple, name: str):
-        """验证状态数据维度"""
+        """形状验证"""
         if data.shape != expected_shape:
-            raise ValueError(f"Invalid {name} shape. Expected: {expected_shape}, Got: {data.shape}")
+            raise ValueError(f"{name} 形状错误，应为 {expected_shape}，实际为 {data.shape}")
 
     def _validate_scalar(self, value: int, name: str):
-        """验证动作是否为标量"""
+        """动作验证"""
         if not (0 <= value < self.num_actions):
-            raise ValueError(f"{name} index out of range. Max allowed: {self.num_actions - 1}")
+            raise ValueError(f"{name} 超出范围，允许的最大值：{self.num_actions - 1}")
 
     @property
     def num_actions(self) -> int:
-        """返回动作空间维度"""
+        """动作空间维度"""
         return self.actions.max() + 1 if self.current_size > 0 else 0
 
     @property
