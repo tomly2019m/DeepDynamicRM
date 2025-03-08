@@ -642,6 +642,7 @@ class SLOTrainer:
             loss = self.criterion(outputs, labels)
 
             loss.backward()
+            # 可调参数
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
 

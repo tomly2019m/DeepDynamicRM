@@ -6,118 +6,238 @@ import argparse
 import torch
 
 
-class DynamicServiceEncoder(nn.Module):
-    """动态服务时序特征编码器"""
+class SAC_StateEncoder(nn.Module):
+    """SAC专用的轻量级状态编码器，融合服务和延迟特征"""
 
-    def __init__(self, feat_dim=25, hidden_dim=64):
+    def __init__(self, service_feature_dim=26, latency_feature_dim=6, time_steps=30, service_num=28, hidden_dim=128):
         super().__init__()
-        # 轻量化时序卷积
-        self.conv = nn.Sequential(
-            nn.Conv1d(feat_dim, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(32, hidden_dim, kernel_size=3, padding=1),
-        )
-        # 时序注意力
-        self.attn = nn.MultiheadAttention(hidden_dim, num_heads=2)
 
-    def forward(self, x):
-        """
-        输入: (B, num_services, time_steps, feat_dim)
-        输出: (B, hidden_dim)
-        """
-        B, S, T, F = x.shape
-        # 并行处理所有服务
-        x = x.view(B * S, T, F)
-        # 时序卷积 [B*S, T, F] -> [B*S, F', T]
-        x = self.conv(x.permute(0, 2, 1))  # 转换为通道优先
-        # 时序注意力 [B*S, F', T] -> [B*S, F']
-        x, _ = self.attn(x, x, x)
-        x = x.mean(dim=1)
-        # 服务聚合 [B*S, F'] -> [B, F']
-        return x.view(B, S, -1).mean(dim=1)
+        # 服务特征轻量编码 (处理形状: B,T,S,F)
+        self.service_encoder = nn.Sequential(
+            nn.Conv2d(
+                in_channels=time_steps,  # 时间维度作为通道
+                out_channels=32,
+                kernel_size=(3, 3),
+                padding=1),
+            nn.ReLU(),
+            nn.Flatten(start_dim=2),  # 保持服务维度
+            nn.Linear(32 * service_feature_dim, 64),
+            nn.LayerNorm(64),
+            nn.ReLU(),
+            nn.Linear(64, hidden_dim // 2))
+
+        # 延迟特征时序编码 (处理形状: B,T,D)
+        self.latency_encoder = nn.Sequential(
+            nn.Linear(latency_feature_dim, 32), nn.ReLU(),
+            nn.LSTM(input_size=32, hidden_size=hidden_dim // 2, num_layers=1, batch_first=True))
+        self.latency_proj = nn.Linear(hidden_dim // 2, hidden_dim // 2)
+
+        # 特征融合层
+        self.fusion = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.Mish())
+
+    def forward(self, service_data, latency_data):
+        """处理两种输入并生成联合特征"""
+        # 服务特征处理 (B,T,S,F) → (B,H//2)
+        B, T, S, F = service_data.size()
+        service_feat = self.service_encoder(service_data.permute(0, 1, 3, 2))  # Conv2d需要通道在dim1
+        service_feat = service_feat.mean(dim=2)  # 聚合服务维度
+
+        # 延迟特征处理 (B,T,D) → (B,H//2)
+        latency_out, _ = self.latency_encoder(latency_data.view(B, T, -1))
+        latency_feat = self.latency_proj(latency_out[:, -1, :])  # 取最后时间步
+
+        # 特征融合
+        combined = torch.cat([service_feat, latency_feat], dim=1)
+        return self.fusion(combined)
 
 
 class Q_Net(nn.Module):
-    """适应动态服务数量的Q网络"""
+    """离散SAC专用Q网络，集成状态编码器"""
 
-    def __init__(self, num_actions=5, time_steps=30):
+    def __init__(self, num_actions=8, service_feature_dim=26, latency_feature_dim=6, time_steps=30, hidden_dim=128):
         super().__init__()
-        # 服务编码器
-        self.encoder = DynamicServiceEncoder()
-        # 动作价值头
-        self.q_head = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, num_actions))
 
-    def forward(self, state):
+        # 联合特征编码器
+        self.encoder = SAC_StateEncoder(service_feature_dim=service_feature_dim,
+                                        latency_feature_dim=latency_feature_dim,
+                                        time_steps=time_steps,
+                                        hidden_dim=hidden_dim)
+
+        # Q值预测头（支持离散动作空间）
+        self.q_head = nn.Sequential(nn.Linear(hidden_dim, 256), nn.LayerNorm(256), nn.Mish(), nn.Dropout(0.1),
+                                    nn.Linear(256, num_actions))
+
+    def forward(self, service_data, latency_data):
         """
-        输入: (B, time_steps, num_services, feat_dim)
-        输出: (B, num_actions)
+        输入:
+        - service_data: (B, T, S, F) 服务特征矩阵，支持动态S
+        - latency_data: (B, T, D=6) 延迟时序数据
+        输出:
+        - q_values: (B, A) 各动作Q值
         """
-        # 动态编码服务
-        state_feat = self.encoder(state)
-        # 生成Q值
+        # 联合特征编码
+        state_feat = self.encoder(service_data, latency_data)  # (B, H)
+
+        # 生成动作价值
         return self.q_head(state_feat)
 
 
 class Duel_Q_Net(nn.Module):
-    """支持动态服务输入的Dueling DQN"""
+    """支持动态服务输入的Dueling DQN，整合SAC编码器"""
 
-    def __init__(self, opt):
-        super(Duel_Q_Net, self).__init__()
-        self.encoder = DynamicServiceEncoder(feat_dim=opt.feat_dim)
-        self.fc = nn.Linear(64, opt.fc_width)  # 编码器输出64维
+    def __init__(self,
+                 num_actions=8,
+                 service_feature_dim=26,
+                 latency_feature_dim=6,
+                 time_steps=30,
+                 hidden_dim=128,
+                 fc_width=256):
+        super().__init__()
 
-        # Dueling 结构
-        self.A = nn.Linear(opt.fc_width, opt.action_dim)  # Advantage流
-        self.V = nn.Linear(opt.fc_width, 1)  # Value流
+        # 联合特征编码器
+        self.encoder = SAC_StateEncoder(service_feature_dim=service_feature_dim,
+                                        latency_feature_dim=latency_feature_dim,
+                                        time_steps=time_steps,
+                                        hidden_dim=hidden_dim)
 
-    def forward(self, obs):
+        # Dueling结构分支
+        self.value_stream = nn.Sequential(nn.Linear(hidden_dim, fc_width), nn.LayerNorm(fc_width), nn.Mish(),
+                                          nn.Linear(fc_width, 1))
+
+        self.advantage_stream = nn.Sequential(nn.Linear(hidden_dim, fc_width), nn.LayerNorm(fc_width), nn.Mish(),
+                                              nn.Linear(fc_width, num_actions))
+
+    def forward(self, service_data, latency_data):
         """
-        输入: obs形状 (B, T, S, F)
-        输出: Q值 (B, action_dim)
+        输入: 
+        - service_data: (B, T, S, F) 动态服务数据
+        - latency_data: (B, T, D) 延迟时序数据
+        输出: 
+        - Q值 (B, A)
         """
-        s = self.encoder(obs)  # [B, 64]
-        s = F.relu(self.fc(s))  # [B, fc_width]
+        # 特征编码
+        state_feat = self.encoder(service_data, latency_data)  # (B, H)
 
-        Adv = self.A(s)  # [B, action_dim]
-        Val = self.V(s)  # [B, 1]
-        Q = Val + (Adv - Adv.mean(dim=1, keepdim=True))
+        # Dueling计算
+        V = self.value_stream(state_feat)
+        A = self.advantage_stream(state_feat)
+        Q = V + (A - A.mean(dim=-1, keepdim=True))
+
         return Q
 
 
 class Double_Q_Net(nn.Module):
-    """双Q网络结构"""
+    """基于SAC状态编码器的双Q网络，支持动态服务输入"""
 
-    def __init__(self, opt):
-        super(Double_Q_Net, self).__init__()
-        self.Q1 = Duel_Q_Net(opt)
-        self.Q2 = Duel_Q_Net(opt)
+    def __init__(self,
+                 num_actions=8,
+                 service_feature_dim=26,
+                 latency_feature_dim=6,
+                 time_steps=30,
+                 hidden_dim=128,
+                 fc_width=256):
+        super().__init__()
 
-    def forward(self, s):
-        return self.Q1(s), self.Q2(s)
+        # 共享编码器结构的双Q网络
+        self.Q1 = Duel_Q_Net(num_actions=num_actions,
+                             service_feature_dim=service_feature_dim,
+                             latency_feature_dim=latency_feature_dim,
+                             time_steps=time_steps,
+                             hidden_dim=hidden_dim,
+                             fc_width=fc_width)
+
+        self.Q2 = Duel_Q_Net(num_actions=num_actions,
+                             service_feature_dim=service_feature_dim,
+                             latency_feature_dim=latency_feature_dim,
+                             time_steps=time_steps,
+                             hidden_dim=hidden_dim,
+                             fc_width=fc_width)
+
+    def forward(self, service_data, latency_data):
+        """
+        输入: 
+        - service_data: (B, T, S, F) 动态服务数据
+        - latency_data: (B, T, D) 延迟时序数据
+        输出: 
+        - Q1, Q2: (B, A) 两个Q网络的预测
+        """
+        return self.Q1(service_data, latency_data), self.Q2(service_data, latency_data)
 
 
 class Double_Duel_Q_Net(nn.Module):
+    """基于SAC编码器的双Dueling Q网络"""
 
-    def __init__(self, opt):
-        super(Double_Duel_Q_Net, self).__init__()
+    def __init__(self,
+                 num_actions=8,
+                 service_feature_dim=26,
+                 latency_feature_dim=6,
+                 time_steps=30,
+                 hidden_dim=128,
+                 fc_width=256):
+        super().__init__()
 
-        self.Q1 = Duel_Q_Net(opt)
-        self.Q2 = Duel_Q_Net(opt)
+        # 共享编码器架构的双Q网络
+        self.Q1 = Duel_Q_Net(num_actions=num_actions,
+                             service_feature_dim=service_feature_dim,
+                             latency_feature_dim=latency_feature_dim,
+                             time_steps=time_steps,
+                             hidden_dim=hidden_dim,
+                             fc_width=fc_width)
 
-    def forward(self, s):
-        q1 = self.Q1(s)
-        q2 = self.Q2(s)
-        return q1, q2
+        self.Q2 = Duel_Q_Net(num_actions=num_actions,
+                             service_feature_dim=service_feature_dim,
+                             latency_feature_dim=latency_feature_dim,
+                             time_steps=time_steps,
+                             hidden_dim=hidden_dim,
+                             fc_width=fc_width)
+
+    def forward(self, service_data, latency_data):
+        """
+        输入: 
+        - service_data: (B, T, S, F) 动态服务数据
+        - latency_data: (B, T, D) 延迟时序数据
+        输出: 
+        - q1, q2: (B, A) 双Q网络预测值
+        """
+        return self.Q1(service_data, latency_data), self.Q2(service_data, latency_data)
 
 
 class Policy_Net(nn.Module):
-    """策略网络 (基于Dueling结构)"""
+    """适配动态服务的策略网络"""
 
-    def __init__(self, opt):
-        super(Policy_Net, self).__init__()
-        self.encoder = DynamicServiceEncoder(feat_dim=opt.feat_dim)
-        self.fc = nn.Linear(64, opt.fc_width)
-        self.head = nn.Linear(opt.fc_width, opt.action_dim)
+    def __init__(self,
+                 num_actions=8,
+                 service_feature_dim=26,
+                 latency_feature_dim=6,
+                 time_steps=30,
+                 hidden_dim=128,
+                 fc_width=256):
+        super().__init__()
+
+        # 共享状态编码器
+        self.encoder = SAC_StateEncoder(service_feature_dim=service_feature_dim,
+                                        latency_feature_dim=latency_feature_dim,
+                                        time_steps=time_steps,
+                                        hidden_dim=hidden_dim)
+
+        # 策略网络主体
+        self.policy_net = nn.Sequential(nn.Linear(hidden_dim, fc_width), nn.LayerNorm(fc_width), nn.Mish(),
+                                        nn.Dropout(0.1), nn.Linear(fc_width, num_actions))
+
+    def forward(self, service_data, latency_data):
+        """
+        输入:
+        - service_data: (B, T, S, F)
+        - latency_data: (B, T, D)
+        输出:
+        - action_probs: (B, A) 动作概率分布
+        """
+        # 特征编码
+        state_feat = self.encoder(service_data, latency_data)
+
+        # 生成策略
+        logits = self.policy_net(state_feat)
+        return F.gumbel_softmax(logits, tau=1.0, hard=False)
 
 
 class ReplayBuffer:
