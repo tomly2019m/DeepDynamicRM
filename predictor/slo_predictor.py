@@ -53,6 +53,7 @@ print(f"数据加载成功！总时间步: {n_timesteps}")
 # 步骤3：特征工程处理
 # ----------------------------------
 def process_gathered(gathered, replicas):
+    global latency, cpu_configs
     """处理第一类数据：融合副本数量（不标准化）并对统计量标准化"""
 
     #数据清洗
@@ -366,9 +367,12 @@ class ServiceBranch(nn.Module):
 
         # 多尺度卷积网络
         self.conv_blocks = nn.ModuleList([
-            nn.Sequential(nn.Conv1d(feature_dim, conv_channels, kernel_size=k, padding=k // 2),
-                          nn.BatchNorm1d(conv_channels), nn.ReLU(), nn.AdaptiveMaxPool1d(time_steps // (2**i)))
-            for i, k in enumerate([3, 5, 7])  # 不同尺度的卷积核
+            nn.Sequential(
+                nn.Conv1d(feature_dim, conv_channels, kernel_size=k, padding=k // 2),
+                nn.BatchNorm1d(conv_channels),
+                nn.ReLU(),
+                nn.AdaptiveMaxPool1d(16)  # 统一所有分支输出为固定长度
+            ) for k in [3, 5, 7]  # 保持通道数一致，统一时间维度
         ])
 
         # 时空LSTM编码器
@@ -408,11 +412,10 @@ class ServiceBranch(nn.Module):
         # 并行多尺度卷积
         conv_features = []
         for conv in self.conv_blocks:
-            feat = conv(x_reshaped)  # (B*S, C, T')
-            feat = feat.reshape(B, S, -1, T // 2)  # 降采样后的时间维度
+            feat = conv(x_reshaped)  # (B*S, C, 16)
             conv_features.append(feat)
 
-        # 多尺度特征拼接 (B*S, 3C, T//2)
+        # 多尺度特征拼接 (B*S, 3C, 16)
         multi_scale = torch.cat(conv_features, dim=1)
 
         # 时空特征编码 ----------------------------
@@ -421,7 +424,7 @@ class ServiceBranch(nn.Module):
 
         # 残差连接
         residual = self.residual(x_reshaped).permute(0, 2, 1)  # (B*S, T, 2H)
-        lstm_out += residual[:, :lstm_out.size(1), :]  # 对齐时间维度
+        lstm_out = lstm_out + residual[:, :lstm_out.size(1), :]  # 对齐时间维度
 
         # 注意力融合 ----------------------------
         if 'hier' in self.mode:
@@ -462,7 +465,7 @@ class LatencyBranch(nn.Module):
                 nn.Tanh(),
                 nn.Linear(64, 1),
                 nn.Softmax(dim=1))
-
+            self.attn_proj = nn.Linear(2 * lstm_hidden, lstm_hidden)
         # 特征融合
         self.fc = nn.Sequential(
             nn.Linear(2 * lstm_hidden * time_steps, 256),  # 全量信息融合
@@ -481,6 +484,7 @@ class LatencyBranch(nn.Module):
             # 时序注意力加权
             attn_weights = self.attention(lstm_out)  # (B, T, 1)
             weighted = torch.sum(lstm_out * attn_weights, dim=1)  # (B, 2H)
+            weighted = self.attn_proj(weighted)
         else:
             # 全量特征拼接
             batch_size = x.size(0)
