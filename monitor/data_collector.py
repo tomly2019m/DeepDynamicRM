@@ -44,10 +44,7 @@ container_id_total_io: dict[str, tuple[int, int]] = {}
 container_id_total_network: dict[str, tuple[int, int]] = {}
 
 # 数据采集指标列表
-metrics = [
-    "cpu_usage", "memory_usage", "io_write", "io_read", "network_recv",
-    "network_send"
-]
+metrics = ["cpu_usage", "memory_usage", "io_write", "io_read", "network_recv", "network_send"]
 
 # 数据采集间隔 单位：秒
 collect_interval = 1
@@ -106,9 +103,7 @@ def set_running_container_list_via_docker_api():
         containers = client.containers.list(filters={"status": "running"})
 
         # 防御性编程：添加空值检查
-        valid_containers = [
-            c for c in containers if getattr(c, 'name', None) is not None
-        ]
+        valid_containers = [c for c in containers if getattr(c, 'name', None) is not None]
         invalid_count = len(containers) - len(valid_containers)
         if invalid_count > 0:
             print(f"警告：发现{invalid_count}个无名容器，已自动过滤")
@@ -118,16 +113,14 @@ def set_running_container_list_via_docker_api():
             try:
                 # 处理名称格式（兼容Docker不同版本）
                 raw_name = container.name
-                container_name = raw_name.lstrip(
-                    '/') if raw_name else f"unnamed_{container.id[:12]}"
+                container_name = raw_name.lstrip('/') if raw_name else f"unnamed_{container.id[:12]}"
 
                 # 过滤逻辑（增加异常捕获）
                 if benchmark_name in container_name:
                     running_container_list.append(container_name)
 
                     # 服务名称解析（防止解析异常）
-                    service_name = parse_service_name(
-                        container_name) if container_name else "unknown"
+                    service_name = parse_service_name(container_name) if container_name else "unknown"
                     if service_name in service_container:
                         service_container[service_name].append(container_name)
                     else:
@@ -227,8 +220,7 @@ def get_container_id_subprocess(container_name: str) -> str:
     """
     try:
         # 安全构造命令（避免注入攻击）
-        cmd = shlex.split(
-            f"docker inspect -f '{{{{.Id}}}}' {shlex.quote(container_name)}")
+        cmd = shlex.split(f"docker inspect -f '{{{{.Id}}}}' {shlex.quote(container_name)}")
 
         # 执行命令（带超时控制）
         result = subprocess.run(
@@ -293,17 +285,10 @@ def get_container_pid_subprocess(container_id: str) -> int:
     """
     try:
         # 安全构造命令（处理特殊字符）
-        cmd = shlex.split(
-            f"docker inspect --format '{{{{.State.Pid}}}}' {shlex.quote(container_id)}"
-        )
+        cmd = shlex.split(f"docker inspect --format '{{{{.State.Pid}}}}' {shlex.quote(container_id)}")
 
         # 执行命令（带超时控制）
-        result = subprocess.run(cmd,
-                                check=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True,
-                                timeout=5)
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
 
         # 提取并验证PID
         pid_str = result.stdout.strip()
@@ -370,8 +355,7 @@ def get_container_cpu_usage():
                     line = f.readline()
                     # 在V2版本中，CPU计数的单位是微秒
                     cum_cpu_time = int(line.split(' ')[1])
-                    previous_cpu_time = container_id_total_cpu.get(
-                        container_id, 0)
+                    previous_cpu_time = container_id_total_cpu.get(container_id, 0)
                     cpu_usage_time = max(cum_cpu_time - previous_cpu_time, 0)
                     container_id_total_cpu[container_id] = cum_cpu_time
                     service_cpu_time[service_name].append(cpu_usage_time)
@@ -430,10 +414,7 @@ def get_io_usage():
                     parts = line.strip().split()
                     if len(parts) < 2:
                         continue  # Skip invalid lines
-                    stats = {
-                        k.split('=')[0]: int(k.split('=')[1])
-                        for k in parts[1:]
-                    }  # Parse key-value pairs
+                    stats = {k.split('=')[0]: int(k.split('=')[1]) for k in parts[1:]}  # Parse key-value pairs
 
                     # Accumulate values across all devices
                     total_rbytes += stats.get('rbytes', 0)
@@ -442,13 +423,9 @@ def get_io_usage():
                     total_wios += stats.get('wios', 0)
             total_bytes = total_rbytes + total_wbytes
             total_operations = total_rios + total_wios
-            service_io_usage[service].append(
-                (total_bytes - container_id_total_io.get(container_id,
-                                                         (0, 0))[0],
-                 total_operations -
-                 container_id_total_io.get(container_id, (0, 0))[1]))
-            container_id_total_io[container_id] = (total_bytes,
-                                                   total_operations)
+            service_io_usage[service].append((total_bytes - container_id_total_io.get(container_id, (0, 0))[0],
+                                              total_operations - container_id_total_io.get(container_id, (0, 0))[1]))
+            container_id_total_io[container_id] = (total_bytes, total_operations)
     return service_io_usage
 
 
@@ -478,19 +455,12 @@ def get_network_usage():
                     if 'Inter-|   Receive' in line or 'face |bytes    packets errs' in line:
                         continue
                     data = line.strip().split()
-                    data = [
-                        d for d in data
-                        if (d != '' and '#' not in d and ":" not in d)
-                    ]
+                    data = [d for d in data if (d != '' and '#' not in d and ":" not in d)]
                     recv_bytes += int(data[0])
                     send_bytes += int(data[8])
-                last_recv_bytes, last_send_bytes = container_id_total_network.get(
-                    container_id, (0, 0))
-                service_network_usage[service].append(
-                    (recv_bytes - last_recv_bytes,
-                     send_bytes - last_send_bytes))
-                container_id_total_network[container_id] = (recv_bytes,
-                                                            send_bytes)
+                last_recv_bytes, last_send_bytes = container_id_total_network.get(container_id, (0, 0))
+                service_network_usage[service].append((recv_bytes - last_recv_bytes, send_bytes - last_send_bytes))
+                container_id_total_network[container_id] = (recv_bytes, send_bytes)
     return service_network_usage
 
 
@@ -527,11 +497,8 @@ def calculate_mean(data: list | list[list], position: int = 0):
 # 计算一个列表中的标准差
 def calculate_std(data: list | list[list], position: int = 0):
     if isinstance(data[0], list):
-        return math.sqrt(
-            sum((x[position] - calculate_mean(data, position))**2
-                for x in data) / len(data))
-    return math.sqrt(
-        sum((x - calculate_mean(data, position))**2 for x in data) / len(data))
+        return math.sqrt(sum((x[position] - calculate_mean(data, position))**2 for x in data) / len(data))
+    return math.sqrt(sum((x - calculate_mean(data, position))**2 for x in data) / len(data))
 
 
 # 将不同节点上的数据合并
@@ -542,8 +509,7 @@ def concat_data(data1: dict, data2: dict):
 
 
 # 汇聚不同节点上的replicas数据 相同服务，数据相加
-def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str,
-                                                                  list[int]]):
+def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str, list[int]]):
     for k, v in data2.items():
         if k in data1:
             data1[k] = data1[k] + data2[k]
@@ -556,25 +522,10 @@ def gather_replicas_data(data1: dict[str, list[int]], data2: dict[str,
 def process_data(data: dict):
     for k, v in data.items():
         if isinstance(v[0], list):
-            data[k] = [
-                calculate_max(v, 0),
-                calculate_min(v, 0),
-                calculate_mean(v, 0),
-                calculate_std(v, 0)
-            ]
-            data[k].extend([
-                calculate_max(v, 1),
-                calculate_min(v, 1),
-                calculate_mean(v, 1),
-                calculate_std(v, 1)
-            ])
+            data[k] = [calculate_max(v, 0), calculate_min(v, 0), calculate_mean(v, 0), calculate_std(v, 0)]
+            data[k].extend([calculate_max(v, 1), calculate_min(v, 1), calculate_mean(v, 1), calculate_std(v, 1)])
         else:
-            data[k] = [
-                calculate_max(v),
-                calculate_min(v),
-                calculate_mean(v),
-                calculate_std(v)
-            ]
+            data[k] = [calculate_max(v), calculate_min(v), calculate_mean(v), calculate_std(v)]
     return data
 
 
@@ -620,9 +571,7 @@ def transform_data(gathered_data):
 
     # 填充数据
     for service_idx, service_name in enumerate(all_services):
-        for metric_idx, (metric_name,
-                         (src_key,
-                          offset)) in enumerate(metric_mapping.items()):
+        for metric_idx, (metric_name, (src_key, offset)) in enumerate(metric_mapping.items()):
             try:
                 src_data = gathered_data[src_key][service_name]
 
@@ -685,32 +634,21 @@ def set_cpu_limit(cpu_limit: dict[str, int]):
 
     # 生成所有需要执行的命令列表
     commands = [
-        f"docker update --cpus={limit} {container_name}"
-        for service, limit in cpu_limit.items() if service in scalable_service
-        for container_name in service_container[service]
+        f"docker update --cpus={limit} {container_name}" for service, limit in cpu_limit.items()
+        if service in scalable_service for container_name in service_container[service]
     ]
 
     # 使用线程池并行执行（根据CPU核心数动态调整工作线程）
     with ThreadPoolExecutor(max_workers=min(32, len(commands))) as executor:
         for cmd in commands:
             # 提交任务到线程池（不等待结果）
-            executor.submit(subprocess.run,
-                            cmd,
-                            shell=True,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+            executor.submit(subprocess.run, cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def test_to_numpy():
     data = {
-        "serviceA": [
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-            20, 21, 22, 23, 24, 25, 26
-        ],
-        "serviceB": [
-            26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10,
-            9, 8, 7, 6, 5, 4, 3, 2, 1
-        ]
+        "serviceA": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+        "serviceB": [26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
     }
     print(to_numpy(data).shape)
 

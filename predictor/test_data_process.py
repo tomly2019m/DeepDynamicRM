@@ -16,8 +16,7 @@ def test_data_pipeline():
     n_stats = 4  # max/min/mean/std
 
     # 生成符合实际形状的模拟数据
-    gathered = np.random.randn(n_timesteps, n_services, n_metrics,
-                               n_stats) * 10 + 50  # (100,28,6,4)
+    gathered = np.random.randn(n_timesteps, n_services, n_metrics, n_stats) * 10 + 50  # (100,28,6,4)
     latency = np.random.randn(n_timesteps, 5) * 2 + 10  # (100,5)
     replicas = np.random.randint(1, 20, size=(n_services, ))  # (28,)
     labels = np.random.randint(0, 2, size=(n_timesteps, ))  # (100,)

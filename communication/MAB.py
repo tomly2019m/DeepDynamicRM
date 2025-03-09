@@ -103,8 +103,7 @@ class UCB_Bandit:
         """
         从 'communication/mab.json' 文件中读取配置，返回配置字典。
         """
-        config_file_path = os.path.join(PROJECT_ROOT, "communication",
-                                        "mab.json")
+        config_file_path = os.path.join(PROJECT_ROOT, "communication", "mab.json")
 
         try:
             with open(config_file_path, "r") as f:
@@ -121,8 +120,7 @@ class UCB_Bandit:
         """
         从配置文件中加载并生成 allocate_dict 和 replica_dict
         """
-        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config",
-                                        "socialnetwork.json")
+        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "socialnetwork.json")
 
         try:
             with open(config_file_path, "r") as f:
@@ -137,16 +135,13 @@ class UCB_Bandit:
             # 自动生成 allocate_dict 和 replica_dict
             for service_name, service_conf in self.default_cpu_config.items():
                 # CPU分配：直接使用配置中的 cpus 字段
-                self.allocate_dict[service_name] = service_conf.get(
-                    "cpus", 0.0)
+                self.allocate_dict[service_name] = service_conf.get("cpus", 0.0)
                 self.initial_allocation = deepcopy(self.allocate_dict)
 
                 # 副本数：使用配置中的 replica 字段
-                self.replica_dict[service_name] = service_conf.get(
-                    "replica", 1)
+                self.replica_dict[service_name] = service_conf.get("replica", 1)
 
-                self.min_perrep = self.min_core / sum(
-                    self.replica_dict.values())
+                self.min_perrep = self.min_core / sum(self.replica_dict.values())
 
             print(f"已自动生成初始分配：{len(self.allocate_dict)} 个服务的CPU配置")
 
@@ -191,8 +186,7 @@ class UCB_Bandit:
                 ucb_values[arm] = float("inf")
             else:
                 # UCB公式：价值估计 + 探索项
-                exploration = np.sqrt(2 * np.log(self.total_counts) /
-                                      self.counts[arm])
+                exploration = np.sqrt(2 * np.log(self.total_counts) / self.counts[arm])
                 ucb_values[arm] = self.values[arm] + exploration
 
         # 选择UCB值最大的臂（若有多个则随机选择）
@@ -242,13 +236,11 @@ class UCB_Bandit:
 
         print(f"CPU奖励:{cpu_reward}, 延迟奖励:{latency_reward}")
         # 总奖励为CPU奖励和延迟奖励的加权和
-        total_reward = (self.config["cpu_factor"] * cpu_reward +
-                        self.config["latency_factor"] * latency_reward)
+        total_reward = (self.config["cpu_factor"] * cpu_reward + self.config["latency_factor"] * latency_reward)
 
         return total_reward
 
-    def execute_action(self, chosen_arm: int, cpu_state: dict[str,
-                                                              list[float]]):
+    def execute_action(self, chosen_arm: int, cpu_state: dict[str, list[float]]):
         """
         执行选定动作并返回新的资源分配
 
@@ -282,8 +274,7 @@ class UCB_Bandit:
             # 找到负载最高的服务增加资源
             target_service = max(load, key=lambda k: load[k])
             new_cpu = self.allocate_dict[target_service] + action["value"]
-            new_cpu = min(new_cpu,
-                          self.default_cpu_config[target_service]["max_cpus"])
+            new_cpu = min(new_cpu, self.default_cpu_config[target_service]["max_cpus"])
             new_allocation[target_service] = new_cpu
 
         elif action_type == "decrease":
@@ -291,14 +282,12 @@ class UCB_Bandit:
             # 过滤掉 allocate 值为 self.min_perrep 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] >
-                1e-4  # 检查 allocate 值是否为 self.min_perrep
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
             ]
             if len(candidates) > 0:
                 target_service = min(candidates, key=lambda k: load[k])
                 new_allocation[target_service] = max(
-                    self.min_perrep *
-                    self.replica_dict[target_service],  # 保持最小分配量
+                    self.min_perrep * self.replica_dict[target_service],  # 保持最小分配量
                     new_allocation[target_service] - action_value,
                 )
                 # 记录降低之前的配置信息
@@ -318,15 +307,13 @@ class UCB_Bandit:
         elif action_type == "decrease_batch":
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] >
-                1e-4  # 检查 allocate 值是否为 self.min_perrep
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
             ]
 
             if len(candidates) > 0:
                 for service in candidates:
-                    new_allocation[service] = max(
-                        self.min_perrep * self.replica_dict[service],
-                        new_allocation[service] - action["value"])
+                    new_allocation[service] = max(self.min_perrep * self.replica_dict[service],
+                                                  new_allocation[service] - action["value"])
 
                 # self.allocation_history.append(deepcopy(self.allocate_dict))
                 # if len(self.allocation_history) > self.history_length:
@@ -345,14 +332,12 @@ class UCB_Bandit:
             # 过滤掉 allocate 值为 self.min_perrep 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] >
-                1e-4  # 检查 allocate 值是否为 self.min_perrep
+                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
             ]
             if len(candidates) > 0:
                 target_service = min(candidates, key=lambda k: load[k])
-                new_allocation[target_service] = max(
-                    self.min_perrep * self.replica_dict[target_service],
-                    new_allocation[target_service] * (1 - action["value"]))
+                new_allocation[target_service] = max(self.min_perrep * self.replica_dict[target_service],
+                                                     new_allocation[target_service] * (1 - action["value"]))
 
                 # self.allocation_history.append(deepcopy(self.allocate_dict))
                 # if len(self.allocation_history) > self.history_length:
@@ -375,10 +360,8 @@ class UCB_Bandit:
 
         # 验证分配有效性
         for service in new_allocation:
-            if new_allocation[service] < self.min_perrep * self.replica_dict[
-                    service]:  # 资源分配下限保护
-                new_allocation[
-                    service] = self.min_perrep * self.replica_dict[service]
+            if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
+                new_allocation[service] = self.min_perrep * self.replica_dict[service]
 
         # set_cpu_limit(new_allocation, self.replica_dict)
 

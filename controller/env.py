@@ -358,7 +358,8 @@ class Env:
         service_config = np.concatenate([service_data, config_expanded], axis=2)  # 形状 (30, 28, 25)
 
         # 2. 将 replica_data 扩展后与上述结果拼接
-        replica_expanded = np.tile(replica_data[np.newaxis, :, np.newaxis], (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
+        replica_expanded = np.tile(replica_data[np.newaxis, :, np.newaxis],
+                                   (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
         combined_data = np.concatenate([service_config, replica_expanded], axis=2)  # 最终形状 (30, 28, 26)
 
         # ========== 服务数据处理 ==========

@@ -4,9 +4,7 @@ import sys
 from typing import Tuple, Optional
 
 
-def execute_command(command: str,
-                    timeout: int = -1,
-                    stream_output: bool = False) -> Tuple[str, Optional[str]]:
+def execute_command(command: str, timeout: int = -1, stream_output: bool = False) -> Tuple[str, Optional[str]]:
     """
     同步执行命令并返回结果
     
@@ -19,10 +17,7 @@ def execute_command(command: str,
     """
     try:
         if stream_output:
-            result = subprocess.run(command,
-                                    shell=True,
-                                    stdout=sys.stdout,
-                                    stderr=sys.stderr)
+            result = subprocess.run(command, shell=True, stdout=sys.stdout, stderr=sys.stderr)
             return None, None
         else:
             process = subprocess.Popen(command,
@@ -45,9 +40,7 @@ def execute_command(command: str,
         return "", str(e)
 
 
-async def execute_command_async(command: str,
-                                timeout: int = -1
-                                ) -> Tuple[str, Optional[str]]:
+async def execute_command_async(command: str, timeout: int = -1) -> Tuple[str, Optional[str]]:
     """
     异步执行命令并返回结果
     
@@ -58,23 +51,20 @@ async def execute_command_async(command: str,
         (output, error): 输出结果和错误信息的元组
     """
     try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE)
+        process = await asyncio.create_subprocess_shell(command,
+                                                        stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE)
 
         if timeout == -1:
             output, error = await process.communicate()
         else:
             try:
-                output, error = await asyncio.wait_for(process.communicate(),
-                                                       timeout=timeout)
+                output, error = await asyncio.wait_for(process.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
                 process.kill()
                 return "", f"命令执行超时(>{timeout}秒)"
 
-        return output.decode().strip(), error.decode().strip(
-        ) if error else None
+        return output.decode().strip(), error.decode().strip() if error else None
 
     except Exception as e:
         return "", str(e)

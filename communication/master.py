@@ -22,10 +22,7 @@ from deploy.util.ssh import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time", type=int, default=15, help="experiment time")
-parser.add_argument("--username",
-                    type=str,
-                    default="tomly",
-                    help="username for SSH connection")
+parser.add_argument("--username", type=str, default="tomly", help="username for SSH connection")
 parser.add_argument("--save", action="store_true", help="whether to save data")
 
 args = parser.parse_args()
@@ -56,8 +53,7 @@ class SlaveConnection:
     async def connect(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((self.slave_host, self.slave_port))
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE,
-                               1)  # 开启TCP保活
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # 开启TCP保活
         print(f"Connected to slave at {self.slave_host}:{self.slave_port}")
 
     def send_command_sync(self, command) -> str:
@@ -107,8 +103,7 @@ class SlaveConnection:
             print(f"Connection to {self.slave_host}:{self.slave_port} closed.")
 
 
-async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
-                           users: int, load_type: str, min_core):
+async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], users: int, load_type: str, min_core):
     global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
 
     tasks = []
@@ -179,14 +174,10 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
                         modify = True
                         break
                     data_dict = json.loads(result)
-                    gathered["cpu"] = concat_data(gathered["cpu"],
-                                                  data_dict["cpu"])
-                    gathered["memory"] = concat_data(gathered["memory"],
-                                                     data_dict["memory"])
-                    gathered["io"] = concat_data(gathered["io"],
-                                                 data_dict["io"])
-                    gathered["network"] = concat_data(gathered["network"],
-                                                      data_dict["network"])
+                    gathered["cpu"] = concat_data(gathered["cpu"], data_dict["cpu"])
+                    gathered["memory"] = concat_data(gathered["memory"], data_dict["memory"])
+                    gathered["io"] = concat_data(gathered["io"], data_dict["io"])
+                    gathered["network"] = concat_data(gathered["network"], data_dict["network"])
                 if not modify:
                     break
 
@@ -210,13 +201,8 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
 
             # 副本初始化阶段
             if len(replicas) == 0:
-                replicas = np.array([
-                    len(cpu_list) for cpu_list in gathered["cpu"].values()
-                ]).flatten()
-                service_replicas = {
-                    key: len(cpu_list)
-                    for key, cpu_list in gathered["cpu"].items()
-                }
+                replicas = np.array([len(cpu_list) for cpu_list in gathered["cpu"].values()]).flatten()
+                service_replicas = {key: len(cpu_list) for key, cpu_list in gathered["cpu"].items()}
 
             print(f"当前实验进度: {current_exp_time}/{exp_time}")
 
@@ -252,8 +238,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
                 new_allocate[service] /= service_replicas[service]
             tasks.clear()
             for connection in connections.values():
-                connection.send_command_sync(
-                    f"update{json.dumps(new_allocate)}")
+                connection.send_command_sync(f"update{json.dumps(new_allocate)}")
 
             reward = mab.calculate_reward(latency)
             mab.update(arm_id, reward)
@@ -266,8 +251,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection],
             gathered_list.append(gathered)
             latency_list.append(latency)
             # 保存cpu配置信息
-            cpu_config_list.append(
-                [stored_allocate[service] for service in services])
+            cpu_config_list.append([stored_allocate[service] for service in services])
             store_time = time.time() - store_start
             print(f"数据存储耗时: {store_time:.3f}秒")
 
@@ -307,10 +291,7 @@ def setup_slave():
                    "nohup ~/miniconda3/envs/DDRM/bin/python3 "
                    f"slave.py --port {port}")
 
-        execute_command_via_system_ssh(host,
-                                       username,
-                                       command,
-                                       async_exec=True)
+        execute_command_via_system_ssh(host, username, command, async_exec=True)
 
         print(f"在 {host} 上启动监听服务,端口:{port}")
 
@@ -391,8 +372,7 @@ async def main():
             exp_time = 500
 
         for load_type in ["constant", "daynight", "bursty", "noisy"]:
-            await start_experiment(connections, users, load_type,
-                                   mab_config[str(users)])
+            await start_experiment(connections, users, load_type, mab_config[str(users)])
             if save:
                 save_data(gathered_list, replicas)
 
