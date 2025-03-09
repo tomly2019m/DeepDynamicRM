@@ -1,3 +1,6 @@
 communication/data/
 *.csv
 predictor/model/
+**/exp_data/
+**/logs/
+**/checkpoints/
