@@ -12,6 +12,7 @@ from collections import deque
 import paramiko
 from sklearn.preprocessing import StandardScaler
 import torch
+import torch.nn.functional as F
 from monitor.data_collector import concat_data, process_data, transform_data
 from mylocust.util.get_latency_data import get_latest_latency
 
@@ -80,18 +81,20 @@ class Env:
         self.cpu_state = {}
 
         # 预测器
-        self.predictor = DynamicSLOPredictor(service_mode="attention")
+        self.predictor = DynamicSLOPredictor(service_mode="hier_attention")
         self._load_predictor()
 
         # 奖励参数
-        self.w1, self.w2, self.w3, self.s4 = 0, 0, 0, 0
+        self.w1, self.w2, self.w3, self.w4 = 0, 0, 0, 0
         self.pv = 0  # pv阈值
         self.threshold = 0  # SLO阈值
         self._load_reward_config()
 
         self.steps = 0  # 统计step
 
-        self.done_steps = 90 * 200
+        self.done_steps = 36 * 500
+
+        self.every_episode_steps = 500
 
         # 预填充buffer
         self.warmup()
@@ -365,9 +368,9 @@ class Env:
         # ========== 服务数据处理 ==========
         processed_serv = np.zeros_like(combined_data)
         for s in range(28):  # 遍历每个服务
-            # 提取特征 (10,24)
+            # 提取特征 (10,25)
             features = service_data[:, s, :25]
-            scaled = self.scalers["service"][s].transform(features)  # 输入 (10,24)
+            scaled = self.scalers["service"][s].transform(features)  # 输入 (10,25)
             processed_serv[:, s, :25] = scaled
         # 保留第26个特征（replica_data）不归一化
         processed_serv[:, s, 25] = combined_data[:, s, 25]
@@ -403,9 +406,13 @@ class Env:
         latency_batch = np.expand_dims(stacked_latency, axis=0)  # shape (1,30,6)
 
         # 得到预测概率
-        pv = 0
         with torch.no_grad():
-            pv = self.predictor(torch.FloatTensor(state_batch), torch.FloatTensor(latency_batch)).item()
+            # 获取预测结果
+            predictions = self.predictor(torch.FloatTensor(state_batch), torch.FloatTensor(latency_batch))
+            # 应用softmax获取概率分布
+            probs = F.softmax(predictions, dim=1)
+            # 获取第五类的概率作为违例概率
+            pv = probs[0, 5].item()  # 索引5对应第六类
 
         p99_latency = latency[-2]
         reward = self._calculate_reward(pv, p99_latency)
@@ -414,7 +421,7 @@ class Env:
         self.steps += 1
         done = False
         if self.steps < self.done_steps:
-            if self.steps % 200 == 0:
+            if self.steps % self.every_episode_steps == 0:
                 done = True
         return stacked_state, reward, done
 

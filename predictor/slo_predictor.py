@@ -501,7 +501,6 @@ class DynamicSLOPredictor(nn.Module):
         # 特征提取模块（保持原始设计）
         self.service_net = ServiceBranch(mode=service_mode)  # 输出维度 (B, 128)
         self.latency_net = LatencyBranch()  # 输出维度 (B, 64)
-
         # 修改后的六分类器
         self.classifier = nn.Sequential(
             nn.Linear(128 + 64, 256),  # 增加中间层维度
@@ -877,7 +876,7 @@ def main():
     # 可选：特征重要性分析
     if torch.cuda.is_available():
         sample_data = (trainer.test_dataset[0][0].unsqueeze(0).cuda(), trainer.test_dataset[0][1].unsqueeze(0).cuda())
-        analyze_feature_importance(trainer.model, sample_data)
+        # analyze_feature_importance(trainer.model, sample_data)
 
 
 if __name__ == "__main__":
