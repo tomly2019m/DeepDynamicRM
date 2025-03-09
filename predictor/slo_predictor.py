@@ -691,7 +691,7 @@ class SLOTrainer:
         self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size)
         self.test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size)
 
-    def train(self, epochs=5000, early_stop=5000):
+    def train(self, epochs=5000, early_stop=5000, callback=None):
         """使用验证集准确率作为早停标准"""
         best_acc = 0
         no_improve = 0
@@ -716,6 +716,9 @@ class SLOTrainer:
                 if no_improve >= early_stop:
                     print(f"Early stopping at epoch {epoch+1}")
                     break
+
+            if callback:
+                callback(epoch, train_loss, val_metrics, self.optimizer.param_groups[0]['lr'])
 
     def save_checkpoint(self, path=f'{save_dir}/best_model.pth'):
         """保存完整训练状态"""
@@ -829,18 +832,79 @@ def analyze_feature_importance(model, sample):
 
 
 def main():
+    # 导入必要的模块
+    import time
+    import os
+    import json
+    import matplotlib.pyplot as plt
+    from torch.utils.tensorboard import SummaryWriter
+
+    # 创建基于时间戳的保存目录
+    time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    save_dir = f"./predictor/{time_str}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 创建日志记录器
+    log_file = f"{save_dir}/training_log.txt"
+    tensorboard_dir = f"{save_dir}/tensorboard"
+    writer = SummaryWriter(tensorboard_dir)
+
+    # 记录函数
+    def log_info(message):
+        time_now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        log_message = f"[{time_now}] {message}"
+        print(log_message)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(log_message + "\n")
+
+    # 记录训练开始
+    log_info("开始训练过程")
+    start_time = time.time()
+
     # 数据预处理
+    log_info("开始数据预处理...")
     train_data, val_data, test_data, service_scalers, latency_scaler = process_data(window_size=30,
                                                                                     pred_window=5,
                                                                                     threshold=500)
+    log_info(f"数据预处理完成，训练集大小: {len(train_data[0])}, 验证集大小: {len(val_data[0])}, 测试集大小: {len(test_data[0])}")
+
+    # 保存标准化器
+    log_info("保存标准化器...")
+    import joblib
+    scaler_dir = f"{save_dir}/scalers"
+    os.makedirs(scaler_dir, exist_ok=True)
+    joblib.dump(service_scalers, f"{scaler_dir}/service_scalers.pkl")
+    joblib.dump(latency_scaler, f"{scaler_dir}/latency_scaler.pkl")
 
     # 计算类别权重（处理不平衡数据）
+    log_info("计算类别权重...")
     from sklearn.utils.class_weight import compute_class_weight
     _, _, y_train = train_data
     class_weights = compute_class_weight('balanced', classes=np.arange(6), y=y_train)
     class_weights = torch.tensor(class_weights, dtype=torch.float32)
 
+    # 记录类别分布
+    unique, counts = np.unique(y_train, return_counts=True)
+    class_distribution = dict(zip(unique, counts))
+    log_info(f"类别分布: {class_distribution}")
+    log_info(f"类别权重: {class_weights.numpy().tolist()}")
+
+    # 保存训练配置
+    config = {
+        "window_size": 30,
+        "pred_window": 5,
+        "threshold": 500,
+        "service_mode": "hier_attention",
+        "batch_size": 128,
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "class_distribution": class_distribution,
+        "class_weights": class_weights.numpy().tolist(),
+    }
+    with open(f"{save_dir}/config.json", "w") as f:
+        json.dump(config, f, indent=4)
+
     # 初始化训练器
+    log_info("初始化训练器...")
     trainer = SLOTrainer(
         service_mode='hier_attention',
         device='cuda' if torch.cuda.is_available() else 'cpu',
@@ -849,34 +913,161 @@ def main():
 
     # 准备数据（添加维度验证）
     try:
+        log_info("准备数据...")
         trainer.prepare_data(train_data, val_data, test_data)
+        log_info("数据准备完成")
     except AssertionError as e:
-        print(f"数据校验失败: {str(e)}")
+        log_info(f"数据校验失败: {str(e)}")
         return
 
-    # 训练流程（增加学习率调度）
+    # 记录模型结构
+    log_info(f"模型结构:\n{trainer.model}")
+    total_params = sum(p.numel() for p in trainer.model.parameters())
+    trainable_params = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
+    log_info(f"总参数量: {total_params}, 可训练参数: {trainable_params}")
+
+    # 训练历史记录
+    history = {"train_loss": [], "val_loss": [], "val_accuracy": [], "val_f1_macro": [], "learning_rate": []}
+
+    # 自定义回调函数
+    def epoch_callback(epoch, train_loss, val_metrics, lr):
+        # 记录到历史
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_metrics["loss"])
+        history["val_accuracy"].append(val_metrics["accuracy"])
+        history["val_f1_macro"].append(val_metrics["f1_macro"])
+        history["learning_rate"].append(lr)
+
+        # 记录到TensorBoard
+        writer.add_scalar("Loss/train", train_loss, epoch)
+        writer.add_scalar("Loss/val", val_metrics["loss"], epoch)
+        writer.add_scalar("Accuracy/val", val_metrics["accuracy"], epoch)
+        writer.add_scalar("F1/macro", val_metrics["f1_macro"], epoch)
+        writer.add_scalar("F1/weighted", val_metrics["f1_weighted"], epoch)
+        writer.add_scalar("LearningRate", lr, epoch)
+
+        # 每10个epoch记录一次详细信息
+        if epoch % 2 == 0:
+            log_info(f"Epoch {epoch}: 训练损失={train_loss:.4f}, 验证损失={val_metrics['loss']:.4f}, "
+                     f"准确率={val_metrics['accuracy']:.4f}, F1={val_metrics['f1_macro']:.4f}, LR={lr:.6f}")
+
+            # 每100个epoch保存一次检查点
+            if epoch % 100 == 0 and epoch > 0:
+                checkpoint_path = f"{save_dir}/checkpoint_epoch_{epoch}.pth"
+                trainer.save_checkpoint(checkpoint_path)
+                log_info(f"保存检查点: {checkpoint_path}")
+
+    # 训练流程（增加学习率调度和回调）
     try:
-        trainer.train(epochs=5000, early_stop=5000)  # 早停窗口设为5000个epoch
+        log_info("开始训练...")
+        trainer.train(epochs=500, early_stop=500, callback=epoch_callback)  # 添加回调函数
     except KeyboardInterrupt:
-        print("\n训练中断，保存临时模型...")
+        log_info("\n训练中断，保存临时模型...")
         trainer.save_checkpoint(f"{save_dir}/interrupted.pth")
 
+        # 保存训练历史
+        with open(f"{save_dir}/history_interrupted.json", "w") as f:
+            json.dump(history, f, indent=4)
+
+    # 分别绘制并保存每个训练曲线
+    log_info("生成训练曲线图表...")
+
+    # 1. 损失曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(history["train_loss"], label="训练损失")
+    plt.plot(history["val_loss"], label="验证损失")
+    plt.legend()
+    plt.title("损失曲线")
+    plt.xlabel("Epoch")
+    plt.ylabel("损失值")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    loss_path = f"{save_dir}/loss_curve.png"
+    plt.savefig(loss_path, dpi=300)
+    plt.close()
+    log_info(f"损失曲线已保存至 {loss_path}")
+
+    # 2. 准确率曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(history["val_accuracy"], label="验证准确率", color="green")
+    plt.legend()
+    plt.title("准确率曲线")
+    plt.xlabel("Epoch")
+    plt.ylabel("准确率")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    acc_path = f"{save_dir}/accuracy_curve.png"
+    plt.savefig(acc_path, dpi=300)
+    plt.close()
+    log_info(f"准确率曲线已保存至 {acc_path}")
+
+    # 3. F1分数曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(history["val_f1_macro"], label="验证F1分数", color="orange")
+    plt.legend()
+    plt.title("F1分数曲线")
+    plt.xlabel("Epoch")
+    plt.ylabel("F1分数")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    f1_path = f"{save_dir}/f1_curve.png"
+    plt.savefig(f1_path, dpi=300)
+    plt.close()
+    log_info(f"F1分数曲线已保存至 {f1_path}")
+
+    # 4. 学习率曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(history["learning_rate"], label="学习率", color="purple")
+    plt.legend()
+    plt.title("学习率曲线")
+    plt.xlabel("Epoch")
+    plt.ylabel("学习率")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    lr_path = f"{save_dir}/learning_rate_curve.png"
+    plt.savefig(lr_path, dpi=300)
+    plt.close()
+    log_info(f"学习率曲线已保存至 {lr_path}")
+
     # 最终测试集评估
-    print("\n" + "=" * 50)
-    print("测试集最终表现:")
+    log_info("\n" + "=" * 50)
+    log_info("测试集最终表现:")
     test_metrics = trainer.evaluate(trainer.test_loader)
-    print(f"准确率: {test_metrics['accuracy']:.4f}")
-    print(f"宏平均F1: {test_metrics['f1_macro']:.4f}")
-    print(f"加权F1: {test_metrics['f1_weighted']:.4f}")
+    log_info(f"准确率: {test_metrics['accuracy']:.4f}")
+    log_info(f"宏平均F1: {test_metrics['f1_macro']:.4f}")
+    log_info(f"加权F1: {test_metrics['f1_weighted']:.4f}")
+
+    # 保存混淆矩阵
+    if hasattr(test_metrics, 'confusion_matrix'):
+        plt.figure(figsize=(10, 8))
+        plt.imshow(test_metrics['confusion_matrix'], cmap='Blues')
+        plt.colorbar()
+        plt.xlabel('预测标签')
+        plt.ylabel('真实标签')
+        plt.title('混淆矩阵')
+        plt.savefig(f"{save_dir}/confusion_matrix.png")
+        log_info(f"混淆矩阵已保存至 {save_dir}/confusion_matrix.png")
 
     # 保存最终模型
-    trainer.save_checkpoint(f"{save_dir}/final_model.pth")
-    print(f"模型已保存至 {save_dir}")
+    best_model_path = f"{save_dir}/best_model.pth"
+    final_model_path = f"{save_dir}/final_model.pth"
+    trainer.save_checkpoint(final_model_path)
+    log_info(f"最终模型已保存至 {final_model_path}")
 
-    # 可选：特征重要性分析
-    if torch.cuda.is_available():
-        sample_data = (trainer.test_dataset[0][0].unsqueeze(0).cuda(), trainer.test_dataset[0][1].unsqueeze(0).cuda())
-        # analyze_feature_importance(trainer.model, sample_data)
+    # 如果有最佳模型，复制一份
+    if hasattr(trainer, 'best_model_state'):
+        torch.save(trainer.best_model_state, best_model_path)
+        log_info(f"最佳模型已保存至 {best_model_path}")
+
+    # 保存完整训练历史
+    with open(f"{save_dir}/history.json", "w") as f:
+        json.dump(history, f, indent=4)
+
+    # 记录训练总时间
+    end_time = time.time()
+    training_time = end_time - start_time
+    hours, remainder = divmod(training_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    log_info(f"训练完成！总用时: {int(hours)}小时 {int(minutes)}分钟 {int(seconds)}秒")
+
+    # 关闭TensorBoard写入器
+    writer.close()
 
 
 if __name__ == "__main__":
