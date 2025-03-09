@@ -592,6 +592,7 @@ class SLOTrainer:
             service_mode='hier_attention',
             device='cuda',
             class_weights=None,  # 新增参数：类别权重
+            lr=2e-5,
             batch_size=64):
         """
         参数:
@@ -611,7 +612,7 @@ class SLOTrainer:
         self.criterion = nn.CrossEntropyLoss(
             weight=class_weights.to(self.device) if class_weights is not None else None)
 
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
         self.scaler_manager = None
 
     def _init_model(self, mode):
@@ -657,22 +658,29 @@ class SLOTrainer:
         self.model.eval()
         all_preds = []
         all_labels = []
+        total_loss = 0.0  # 添加损失累加器
 
         with torch.no_grad():
             for service, latency, labels in loader:
                 service = service.to(self.device)
                 latency = latency.to(self.device)
+                labels = labels.to(self.device)  # 将标签也移至设备
 
                 outputs = self.model(service, latency)
                 preds = torch.argmax(outputs, dim=1)  # 取最大概率类别
 
+                # 计算损失
+                loss = self.criterion(outputs, labels)
+                total_loss += loss.item()
+
                 all_preds.append(preds.cpu().numpy())
-                all_labels.append(labels.numpy())
+                all_labels.append(labels.cpu().numpy())  # 确保标签也是CPU张量
 
         y_true = np.concatenate(all_labels)
         y_pred = np.concatenate(all_preds)
 
         metrics = {
+            'loss': total_loss / len(loader),  # 添加平均损失
             'accuracy': accuracy_score(y_true, y_pred),
             'f1_macro': f1_score(y_true, y_pred, average='macro'),
             'f1_weighted': f1_score(y_true, y_pred, average='weighted')
@@ -702,6 +710,7 @@ class SLOTrainer:
 
             print(f"Epoch {epoch+1:03d} | "
                   f"Train Loss: {train_loss:.4f} | "
+                  f"Val Loss: {val_metrics['loss']:.4f} |"
                   f"Val Acc: {val_metrics['accuracy']:.4f} | "
                   f"Macro-F1: {val_metrics['f1_macro']:.4f} | "
                   f"Weighted-F1: {val_metrics['f1_weighted']:.4f}")
@@ -831,7 +840,7 @@ def analyze_feature_importance(model, sample):
     shap.summary_plot(shap_values, sample)
 
 
-def main():
+def main(epochs, learning_rate, batch_size, service_mode):
     # 导入必要的模块
     import time
     import os
@@ -841,7 +850,7 @@ def main():
 
     # 创建基于时间戳的保存目录
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    save_dir = f"./predictor/{time_str}"
+    save_dir = f"./exp_data/{time_str}"
     os.makedirs(save_dir, exist_ok=True)
 
     # 创建日志记录器
@@ -894,10 +903,13 @@ def main():
         "window_size": 30,
         "pred_window": 5,
         "threshold": 500,
-        "service_mode": "hier_attention",
-        "batch_size": 128,
+        "service_mode": service_mode,
+        "batch_size": batch_size,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
-        "class_distribution": class_distribution,
+        "class_distribution": {
+            int(k): int(v)
+            for k, v in class_distribution.items()
+        },
         "class_weights": class_weights.numpy().tolist(),
     }
     with open(f"{save_dir}/config.json", "w") as f:
@@ -906,10 +918,11 @@ def main():
     # 初始化训练器
     log_info("初始化训练器...")
     trainer = SLOTrainer(
-        service_mode='hier_attention',
+        service_mode=service_mode,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         class_weights=class_weights,  # 传入类别权重
-        batch_size=128)
+        batch_size=batch_size,
+        lr=learning_rate)
 
     # 准备数据（添加维度验证）
     try:
@@ -948,8 +961,8 @@ def main():
 
         # 每10个epoch记录一次详细信息
         if epoch % 2 == 0:
-            log_info(f"Epoch {epoch}: 训练损失={train_loss:.4f}, 验证损失={val_metrics['loss']:.4f}, "
-                     f"准确率={val_metrics['accuracy']:.4f}, F1={val_metrics['f1_macro']:.4f}, LR={lr:.6f}")
+            log_info(f"Epoch {epoch}: train loss={train_loss:.4f}, val loss={val_metrics['loss']:.4f}, "
+                     f"acc={val_metrics['accuracy']:.4f}, F1={val_metrics['f1_macro']:.4f}, LR={lr:.6f}")
 
             # 每100个epoch保存一次检查点
             if epoch % 100 == 0 and epoch > 0:
@@ -960,7 +973,7 @@ def main():
     # 训练流程（增加学习率调度和回调）
     try:
         log_info("开始训练...")
-        trainer.train(epochs=500, early_stop=500, callback=epoch_callback)  # 添加回调函数
+        trainer.train(epochs=epochs, early_stop=500, callback=epoch_callback)  # 添加回调函数
     except KeyboardInterrupt:
         log_info("\n训练中断，保存临时模型...")
         trainer.save_checkpoint(f"{save_dir}/interrupted.pth")
@@ -974,12 +987,12 @@ def main():
 
     # 1. 损失曲线
     plt.figure(figsize=(10, 6))
-    plt.plot(history["train_loss"], label="训练损失")
-    plt.plot(history["val_loss"], label="验证损失")
+    plt.plot(history["train_loss"], label="train_loss")
+    plt.plot(history["val_loss"], label="val_loss", color="red")
     plt.legend()
-    plt.title("损失曲线")
+    plt.title("loss curve")
     plt.xlabel("Epoch")
-    plt.ylabel("损失值")
+    plt.ylabel("loss")
     plt.grid(True, linestyle='--', alpha=0.6)
     loss_path = f"{save_dir}/loss_curve.png"
     plt.savefig(loss_path, dpi=300)
@@ -988,11 +1001,11 @@ def main():
 
     # 2. 准确率曲线
     plt.figure(figsize=(10, 6))
-    plt.plot(history["val_accuracy"], label="验证准确率", color="green")
+    plt.plot(history["val_accuracy"], label="val ACC", color="green")
     plt.legend()
-    plt.title("准确率曲线")
+    plt.title("ACC curve")
     plt.xlabel("Epoch")
-    plt.ylabel("准确率")
+    plt.ylabel("accuracy")
     plt.grid(True, linestyle='--', alpha=0.6)
     acc_path = f"{save_dir}/accuracy_curve.png"
     plt.savefig(acc_path, dpi=300)
@@ -1001,11 +1014,11 @@ def main():
 
     # 3. F1分数曲线
     plt.figure(figsize=(10, 6))
-    plt.plot(history["val_f1_macro"], label="验证F1分数", color="orange")
+    plt.plot(history["val_f1_macro"], label="Val F1 score", color="orange")
     plt.legend()
-    plt.title("F1分数曲线")
+    plt.title("F1 score curve")
     plt.xlabel("Epoch")
-    plt.ylabel("F1分数")
+    plt.ylabel("F1 score")
     plt.grid(True, linestyle='--', alpha=0.6)
     f1_path = f"{save_dir}/f1_curve.png"
     plt.savefig(f1_path, dpi=300)
@@ -1014,11 +1027,11 @@ def main():
 
     # 4. 学习率曲线
     plt.figure(figsize=(10, 6))
-    plt.plot(history["learning_rate"], label="学习率", color="purple")
+    plt.plot(history["learning_rate"], label="learning rate", color="purple")
     plt.legend()
-    plt.title("学习率曲线")
+    plt.title("lr curve")
     plt.xlabel("Epoch")
-    plt.ylabel("学习率")
+    plt.ylabel("lr")
     plt.grid(True, linestyle='--', alpha=0.6)
     lr_path = f"{save_dir}/learning_rate_curve.png"
     plt.savefig(lr_path, dpi=300)
@@ -1029,9 +1042,9 @@ def main():
     log_info("\n" + "=" * 50)
     log_info("测试集最终表现:")
     test_metrics = trainer.evaluate(trainer.test_loader)
-    log_info(f"准确率: {test_metrics['accuracy']:.4f}")
-    log_info(f"宏平均F1: {test_metrics['f1_macro']:.4f}")
-    log_info(f"加权F1: {test_metrics['f1_weighted']:.4f}")
+    log_info(f"accuracy: {test_metrics['accuracy']:.4f}")
+    log_info(f"宏平均F1 marco avg F1: {test_metrics['f1_macro']:.4f}")
+    log_info(f"weighted F1: {test_metrics['f1_weighted']:.4f}")
 
     # 保存混淆矩阵
     if hasattr(test_metrics, 'confusion_matrix'):
@@ -1071,4 +1084,26 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parameters = [{
+        "epochs": 300,
+        "learning_rate": 2e-5,
+        "batch_size": 128,
+        "service_mode": "hier_attention",
+    }, {
+        "epochs": 300,
+        "learning_rate": 2e-5,
+        "batch_size": 128,
+        "service_mode": "multi_scale",
+    }, {
+        "epochs": 300,
+        "learning_rate": 1e-5,
+        "batch_size": 64,
+        "service_mode": "hier_attention",
+    }, {
+        "epochs": 300,
+        "learning_rate": 1e-5,
+        "batch_size": 64,
+        "service_mode": "multi_scale",
+    }]
+    for parameter in parameters:
+        main(**parameter)
