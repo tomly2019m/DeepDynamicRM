@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import time
 from typing import Dict, Tuple
@@ -92,9 +93,9 @@ class Env:
 
         self.steps = 0  # 统计step
 
-        self.done_steps = 36 * 500
+        self.done_steps = 20 * 2000
 
-        self.every_episode_steps = 500
+        self.every_episode_steps = 2000
 
         # 预填充buffer
         self.warmup()
@@ -572,11 +573,58 @@ class Env:
             # 总惩罚取负（原始设计全为负数奖励）
             return -(delay_penalty + ongoing_penalty)
 
+    async def start_locust(self):
+        locust_cmd = [
+            "locust",  # 命令名称
+            "-f",  # 参数：指定locust文件路径
+            f"{PROJECT_ROOT}/mylocust/src/socialnetwork_mixed.py",  # 你的Locust文件路径
+            "--host",  # 参数：目标主机
+            "http://127.0.0.1:8080",
+            "--users",  # 用户数参数
+            "50",
+            "--csv",  # 输出CSV文件
+            f"{PROJECT_ROOT}/mylocust/locust_log",
+            "--headless",  # 无头模式
+            "-t",  # 测试时长
+            f"{10 * 2000}s",
+        ]
+
+        print(f"locust command:{locust_cmd}")
+
+        try:
+            # 创建子进程，不等待立即返回
+            process = await asyncio.create_subprocess_exec(
+                *locust_cmd,
+                stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
+                stderr=asyncio.subprocess.DEVNULL)
+
+            print(f"Locust已启动，PID: {process.pid}")
+
+            self.locust_pid = process.pid
+
+        except Exception as e:
+            # 捕获启动错误（如命令不存在、路径错误等）
+            print(f"启动Locust失败: {str(e)}")
+            raise
+
+    def stop_locust(self):
+        if self.locust_pid:
+            _, _ = execute_command(f"sudo kill {self.locust_pid}")
+            print("Locust已停止")
+        else:
+            print("Locust未启动")
+
     async def reset(self):
         """重置环境"""
-        self.current_exp_time = 0
-        self.state_buffer.clear()
-        self.gathered_list.clear()
-        self.latency_list.clear()
-        await self.warmup()
-        return self._get_state_window()
+        self.stop_locust()
+        self.locust_pid = None
+        # 清空缓存
+        self.buffer.clear()
+        self.latency_buffer.clear()
+        self.config_buffer.clear()
+        self.allocation_history.clear()
+        # 重新启动locust
+        await self.start_locust()
+        time.sleep(30)
+        self.warmup()
+        return self.get_state_and_latency()

@@ -1,4 +1,5 @@
 import copy
+import os
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -12,6 +13,7 @@ class SACD_agent:
         # Init hyperparameters for agent, just like "self.gamma = opt.gamma, self.lambd = opt.lambd, ..."
         self.__dict__.update(kwargs)
         self.tau = 0.005
+        self.train_counter = 0
         self.H_mean = 0
         self.replay_buffer = ReplayBuffer(
             service_shape=(self.time_steps, self.service_num, self.service_feat_dim),
@@ -55,6 +57,11 @@ class SACD_agent:
             latency = torch.FloatTensor(latency_data).unsqueeze(0).to(self.dvc)  # [1,T,D]
             # 获取预测结果
             probs = self.actor(service, latency)
+
+            p = self.exp_noise
+            if np.random.rand() < p:
+                return np.random.randint(0, self.action_dim)
+
             if deterministic:
                 a = probs.argmax(-1).item()
             else:
@@ -62,6 +69,7 @@ class SACD_agent:
             return a
 
     def train(self):
+        self.train_counter += 1
         (service, latency), a, r, (service_next, latency_next), dw = self.replay_buffer.sample(self.batch_size)
 
         # ------------------------------------------ Train Critic ----------------------------------------#
@@ -119,14 +127,19 @@ class SACD_agent:
             self.alpha = self.log_alpha.exp().item()
 
         # ------------------------------------------ Update Target Net ----------------------------------#
-        for param, target_param in zip(self.q_critic.parameters(), self.q_critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        if self.train_counter % self.update_steps == 0:
+            for param, target_param in zip(self.q_critic.parameters(), self.q_critic_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-    def save(self, timestep, EnvName):
-        torch.save(self.actor.state_dict(), f"./model/sacd_actor_{timestep}_{EnvName}.pth")
-        torch.save(self.q_critic.state_dict(), f"./model/sacd_critic_{timestep}_{EnvName}.pth")
+    def save(self, time, steps):
+        save_path = f"./model/{time}/"
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
 
-    def load(self, timestep, EnvName):
-        self.actor.load_state_dict(torch.load(f"./model/sacd_actor_{timestep}_{EnvName}.pth", map_location=self.dvc))
-        self.q_critic.load_state_dict(torch.load(f"./model/sacd_critic_{timestep}_{EnvName}.pth",
-                                                 map_location=self.dvc))
+        torch.save(self.actor.state_dict(), f"{save_path}/sacd_actor_{time}_{steps}.pth")
+        torch.save(self.q_critic.state_dict(), f"{save_path}/sacd_critic_{time}_{steps}.pth")
+
+    def load(self, time, steps):
+        save_path = f"./model/{time}/"
+        self.actor.load_state_dict(torch.load(f"{save_path}/sacd_actor_{time}_{steps}.pth", map_location=self.dvc))
+        self.q_critic.load_state_dict(torch.load(f"{save_path}/sacd_critic_{time}_{steps}.pth", map_location=self.dvc))

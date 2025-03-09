@@ -319,7 +319,7 @@ def save_data(gathered_list, replicas):
 
     cpu_config_path = f"./data/cpu_config.npy"
     np.save(cpu_config_path, cpu_config_list)
-    print(f"已保存cpu_config_path数据到: {latency_path}")
+    print(f"已保存cpu_config_path数据到: {cpu_config_path}")
 
 
 class Executor:
