@@ -66,6 +66,7 @@ class Env:
 
         # 保存资源配置历史
         self.allocation_history = []
+        self.history_length = 10
 
         # 保存从部署配置文件中读取默认服务配置
         self.default_cpu_config: dict[str, dict[str, float]] = {}
@@ -154,6 +155,15 @@ class Env:
             print(f"[错误] 配置文件解析失败: {str(e)}")
             raise
 
+    def _close_all_slaves(self):
+        for host in self.slaves:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(host, username=self.username)
+            command = f"sudo kill -9 $(sudo lsof -t -i :{self.port})"
+            stdin, stdout, stderr = ssh.exec_command(command)
+            ssh.close()
+
     # 配置slave节点，在所有slave节点上启动监听
     def _setup_slaves(self):
         for host in self.slaves:
@@ -161,7 +171,7 @@ class Env:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                ssh.connect(host, username=self.username)
+                ssh.connect(host[0], username=self.username)
                 # 先切换到目标目录在slave节点上启动监听程序
 
                 # 清理旧的进程
@@ -406,6 +416,7 @@ class Env:
         self.config_buffer.append(self.convert_to_ndarray(deepcopy(self.allocate_dict)))
 
         stacked_state, stacked_latency = self.get_state_and_latency()
+        result = (deepcopy(stacked_state), deepcopy(stacked_latency))
         # 添加批次维度
         state_batch = np.expand_dims(stacked_state, axis=0)  # shape (1,30,28,26)
         latency_batch = np.expand_dims(stacked_latency, axis=0)  # shape (1,30,6)
@@ -418,7 +429,9 @@ class Env:
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
             pv = probs[0, 5].item()  # 索引5对应第六类
-
+        print("延迟概率分布：")
+        print(probs)
+        print(f"当前延迟: {latency}")
         p99_latency = latency[-2]
         reward = self._calculate_reward(pv, p99_latency)
 
@@ -428,7 +441,7 @@ class Env:
         if self.steps < self.done_steps:
             if self.steps % self.every_episode_steps == 0:
                 done = True
-        return stacked_state, reward, done
+        return result[0], result[1], reward, done
 
     def _execute_action(self, action):
         """执行资源分配动作"""
@@ -452,7 +465,7 @@ class Env:
         if action_type == "increase":
             # 找到负载最高的服务增加资源
             target_service = max(load, key=lambda k: load[k])
-            new_cpu = self.allocate_dict[target_service] + action["value"]
+            new_cpu = self.allocate_dict[target_service] + action_value
             new_cpu = min(new_cpu, self.default_cpu_config[target_service]["max_cpus"])
             new_allocation[target_service] = new_cpu
 
@@ -476,7 +489,7 @@ class Env:
             for service in candidates:
                 new_allocation[service] = min(
                     self.default_cpu_config[service]["max_cpus"],
-                    new_allocation[service] + action["value"],
+                    new_allocation[service] + action_value,
                 )
 
         elif action_type == "decrease_batch":
@@ -488,14 +501,14 @@ class Env:
             if len(candidates) > 0:
                 for service in candidates:
                     new_allocation[service] = max(self.min_perrep * self.replica_dict[service],
-                                                  new_allocation[service] - action["value"])
+                                                  new_allocation[service] - action_value)
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
             target_service = max(load, key=lambda k: load[k])
             new_allocation[target_service] = min(
                 self.default_cpu_config[target_service]["max_cpus"],
-                new_allocation[target_service] * (1 + action["value"]),
+                new_allocation[target_service] * (1 + action_value),
             )
 
         elif action_type == "decrease_percent":
@@ -508,7 +521,7 @@ class Env:
             if len(candidates) > 0:
                 target_service = min(candidates, key=lambda k: load[k])
                 new_allocation[target_service] = max(self.min_perrep * self.replica_dict[target_service],
-                                                     new_allocation[target_service] * (1 - action["value"]))
+                                                     new_allocation[target_service] * (1 - action_value))
 
         elif action_type == "reset":
             # 重置到初始配置
@@ -624,7 +637,6 @@ class Env:
         print("停止locust")
         self.stop_locust()
         self.locust_pid = None
-        # 清空缓存
         print("清空缓存")
         self.buffer.clear()
         self.latency_buffer.clear()
@@ -635,6 +647,7 @@ class Env:
         try:
             await self.start_locust()
             print("等待30秒")
+            # TODO 把预热时间改为30秒
             time.sleep(3)
             print("预热")
             self.warmup()
@@ -642,5 +655,3 @@ class Env:
             return self.get_state_and_latency()
         except Exception as e:
             print(f"重置环境失败: {str(e)}")
-        finally:
-            self.stop_locust()

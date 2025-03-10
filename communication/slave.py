@@ -53,6 +53,8 @@ def handle_command(command: str):
     elif command == "flush":
         flush()
         response = "flush success"
+    elif command == "close":
+        response = "stop"
     return response
 
 
@@ -86,8 +88,8 @@ def slave_listen(master_host, master_port):
                 result = handle_command(command)
 
                 if result == "stop" or not result:
-                    conn.sendall("empty response!\r\n\r\n".encode())
-                    break
+                    conn.sendall("connection closed\r\n\r\n".encode())
+                    return
                 # 返回结果，添加结束符
                 result = f"{result}\r\n\r\n"
                 conn.sendall(result.encode())

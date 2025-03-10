@@ -270,6 +270,8 @@ class ReplayBuffer:
             latency_shape: 延迟状态形状 (T,L)
             num_actions: 动作空间大小
         """
+        self.num_actions = num_actions
+
         # 服务状态相关存储 (性能指标)
         self.service_states = np.zeros((buffer_size, *service_shape), dtype=np.float32)  # (buffer_size, 30,28,26)
         self.next_service_states = np.zeros_like(self.service_states)
@@ -344,10 +346,6 @@ class ReplayBuffer:
         if not (0 <= value < self.num_actions):
             raise ValueError(f"{name} 超出范围，允许的最大值：{self.num_actions - 1}")
 
-    @property
-    def num_actions(self) -> int:
-        """动作空间维度"""
-        return self.actions.max() + 1 if self.current_size > 0 else 0
 
     @property
     def is_full(self) -> bool:

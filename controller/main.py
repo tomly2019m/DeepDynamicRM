@@ -17,6 +17,8 @@ import torch
 from SACD import SACD_agent
 from controller.utils import ReplayBuffer
 from env import Env
+from communication.sync import distribute_project
+from mylocust.util.get_latency_data import get_latest_latency
 
 
 def parse_args():
@@ -40,7 +42,7 @@ def parse_args():
     # ================== 训练超参数 ==================
     parser.add_argument('--gamma', type=float, default=0.99, help='折扣因子 (默认: 0.99)')
     parser.add_argument('--tau', type=float, default=0.005, help='目标网络软更新系数 (默认: 0.005)')
-    parser.add_argument('--lr', type=float, default=3e-4, help='统一学习率 (默认: 1e-4)')
+    parser.add_argument('--lr', type=float, default=1e-4, help='统一学习率 (默认: 1e-4)')
     parser.add_argument('--batch-size', type=int, default=256, help='训练批次大小 (默认: 256)')
     parser.add_argument('--adaptive-alpha', action='store_true', help='启用自动熵系数调整 (默认: False)')
     parser.add_argument('--stop-steps', type=int, default=20 * 3600, help='最大训练步数 (默认: 72000)')
@@ -52,6 +54,7 @@ def parse_args():
 
     # ================== 运行模式 ==================
     parser.add_argument('--train', action='store_true', help='训练模式 (默认: 验证模式)')
+    parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
 
     return parser.parse_args()
 
@@ -92,80 +95,94 @@ async def main(args):
         writer = csv.writer(f)
         writer.writerow(['episode', 'total_reward'])
 
-    while total_steps < args.stop_steps:
-        # 重置环境
-        state, latency = await env.reset()
-        done = False
+    try:
+        while total_steps < args.stop_steps:
+            # 重置环境
+            state, latency = await env.reset()
+            done = False
 
-        services = list(env.allocate_dict.keys())
-        episode_dir = os.path.join(exp_data_path, f"episode{episode_num:03d}")
-        os.makedirs(episode_dir, exist_ok=True)
+            services = list(env.allocate_dict.keys())
+            episode_dir = os.path.join(exp_data_path, f"episode{episode_num:03d}")
+            os.makedirs(episode_dir, exist_ok=True)
 
-        # 初始化step记录文件
-        step_csv_path = os.path.join(episode_dir, "step_data.csv")
-        with open(step_csv_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            # 构建表头：公共字段 + 服务字段
-            header = ['step', 'action', 'reward', 'total_cpu'] + \
-                     [f'latency_{i}' for i in range(len(latency))] + \
-                     [f'{s}_cpu' for s in services]
-            writer.writerow(header)
+            start_time = time.time()
 
-        episode_step = 0
-        total_reward = 0
-        while not done:
-            action = agent.select_action(state, latency, deterministic=False)
-
-            # 执行动作
-            next_state, next_latency, reward, done = env.step(action)
-            print(f"action: {action}, reward: {reward}, latency: {next_latency}")
-            agent.replay_buffer.add_experience(state, latency, action, reward, next_state, next_latency, done)
-            total_reward += reward
-
-            original_cpu_allocate = deepcopy(env.allocate_dict)
-            total_cpu = sum(original_cpu_allocate.values())
-
-            # 记录step数据
-            with open(step_csv_path, 'a', newline='') as f:
+            # 初始化step记录文件
+            step_csv_path = os.path.join(episode_dir, "step_data.csv")
+            with open(step_csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                row = [
-                    episode_step,
-                    action,
-                    reward,
-                    total_cpu,
-                    *next_latency,  # 展开延迟特征
-                    *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
-                ]
-                writer.writerow(row)
+                # 构建表头：公共字段 + 服务字段
+                header = ['step', 'action', 'reward', 'total_cpu', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
+                        [f'{s}_cpu' for s in services]
+                writer.writerow(header)
 
-            # 转化为每replica的cpu分配
-            cpu_allocate = deepcopy(env.allocate_dict)
-            print(f"cpu_allocate: {cpu_allocate}")
-            print(f"总cpu分配: {sum(cpu_allocate.values())}")
-            for service in cpu_allocate:
-                cpu_allocate[service] /= env.replica_dict[service]
-            for connection in connections.values():
-                connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
+            episode_step = 0
+            total_reward = 0
+            while not done:
+                action = agent.select_action(state, latency, deterministic=False)
 
-            if agent.replay_buffer.current_size > args.random_steps:
-                agent.train()
-                agent.exp_noise = schedualer.value(total_steps)  # e-greedy decay
+                # 执行动作
+                next_state, next_latency, reward, done = env.step(action)
+                raw_latency = get_latest_latency(next_latency)
+                print(f"action: {action}, reward: {reward}, latency: {raw_latency}")
+                agent.replay_buffer.add_experience(state, latency, action, reward, next_state, next_latency, done)
+                total_reward += reward
 
-            total_steps += 1
-            episode_step += 1
-            if total_steps % 1000 == 0:
-                agent.save(time_str, total_steps)
+                original_cpu_allocate = deepcopy(env.allocate_dict)
+                total_cpu = sum(original_cpu_allocate.values())
 
-        with open(total_reward_path, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([episode_num, total_reward])
+                # 记录step数据
+                with open(step_csv_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    row = [
+                        episode_step,
+                        action,
+                        reward,
+                        total_cpu,
+                        *raw_latency,  # 展开延迟特征
+                        *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
+                    ]
+                    writer.writerow(row)
 
-        print(f"总奖励: {total_reward}")
-        episode_num += 1
+                # 转化为每replica的cpu分配
+                cpu_allocate = deepcopy(env.allocate_dict)
+                print(f"cpu_allocate: {cpu_allocate}")
+                print(f"总cpu分配: {sum(cpu_allocate.values())}")
+                for service in cpu_allocate:
+                    cpu_allocate[service] /= env.replica_dict[service]
+                for connection in connections.values():
+                    connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
+
+                if agent.replay_buffer.current_size > args.random_steps:
+                    agent.train()
+                    agent.exp_noise = schedualer.value(total_steps)  # e-greedy decay
+
+                total_steps += 1
+                episode_step += 1
+                if total_steps % 1000 == 0:
+                    agent.save(time_str, total_steps)
+                # 如果时间小于1秒，则等待
+                while time.time() - start_time < 1:
+                    time.sleep(0.01)
+
+            with open(total_reward_path, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([episode_num, total_reward])
+
+            print(f"总奖励: {total_reward}")
+            episode_num += 1
+    except Exception as e:
+        raise e
+    finally:
+        env.stop_locust()
+        for connection in connections.values():
+            connection.send_command_sync("close")
+            connection.close()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    # distribute_project(args.username)
     print("参数配置：")
     print(f"学习率: {args.lr:.0e}")
     print(f"批大小: {args.batch_size}")
