@@ -5,3 +5,4 @@ predictor/model/
 **/logs/
 **/checkpoints/
 controller/model/
+**/model/
