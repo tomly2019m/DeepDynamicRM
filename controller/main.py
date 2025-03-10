@@ -52,7 +52,7 @@ def parse_args():
     # TODO 修改为1000
     parser.add_argument('--random-steps', type=int, default=1000, help='纯随机探索步数 (默认: 1000)')
     parser.add_argument('--action-dim', type=int, default=8, help='动作维度 (默认: 8)')
-    parser.add_argument('--update-steps', type=int, default=1000, help='更新步数 (默认: 1000)')
+    parser.add_argument('--update-steps', type=int, default=800, help='更新步数 (默认: 800)')
     parser.add_argument('--dvc', type=str, default="cuda", help='设备 (默认: cuda)')
 
     # ================== 运行模式 ==================
@@ -73,31 +73,31 @@ def seed_everything(seed):
 def save_model_params(args, exp_data_path):
     """保存模型的所有相关参数到JSON文件"""
     params_path = os.path.join(exp_data_path, "model_params.json")
-    
+
     # 将参数转换为字典
     params_dict = vars(args)
-    
+
     # 添加额外信息
     params_dict['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     params_dict['pytorch_version'] = torch.__version__
-    
+
     # 尝试加载actions.json和reward.json的配置
     try:
         with open(os.path.join(PROJECT_ROOT, "controller", "actions.json"), "r") as f:
             params_dict['actions_config'] = json.load(f)
     except Exception as e:
         params_dict['actions_config_error'] = str(e)
-    
+
     try:
         with open(os.path.join(PROJECT_ROOT, "controller", "reward.json"), "r") as f:
             params_dict['reward_config'] = json.load(f)
     except Exception as e:
         params_dict['reward_config_error'] = str(e)
-    
+
     # 保存参数到JSON文件
     with open(params_path, 'w', encoding='utf-8') as f:
         json.dump(params_dict, f, indent=4, ensure_ascii=False)
-    
+
     print(f"模型参数已保存到: {params_path}")
 
 
@@ -122,7 +122,7 @@ async def main(args):
     exp_data_path = f"./exp_data/{time_str}/"
     if not os.path.exists(exp_data_path):
         os.makedirs(exp_data_path)
-    
+
     # 保存模型参数
     save_model_params(args, exp_data_path)
 

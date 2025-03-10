@@ -389,7 +389,7 @@ class ServiceBranch(nn.Module):
                                                        batch_first=True)
             self.service_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden, num_heads=attn_heads, batch_first=True)
         else:
-            self.fusion = nn.Sequential(nn.Linear(2 * lstm_hidden * time_steps, 512), nn.ReLU(),
+            self.fusion = nn.Sequential(nn.Linear(2 * lstm_hidden * 16, 512), nn.ReLU(),
                                         nn.Linear(512, lstm_hidden))
 
         # 残差连接
