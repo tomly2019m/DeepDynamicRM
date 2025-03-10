@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument('--stop-steps', type=int, default=20 * 3600, help='最大训练步数 (默认: 72000)')
     parser.add_argument('--replay-size', type=int, default=int(1e6), help='回放缓冲区容量 (默认: 1e6)')
     parser.add_argument('--alpha', type=float, default=0.2, help='init alpha')
-    parser.add_argument('--adaptive_alpha', type=str2bool, default=True, help='Use adaptive alpha turning')
+    parser.add_argument('--adaptive_alpha', type=str2bool, default=True, help='使用自适应alpha调整')
     # TODO 修改为1000
     parser.add_argument('--random-steps', type=int, default=500, help='纯随机探索步数 (默认: 1000)')
     parser.add_argument('--action-dim', type=int, default=8, help='动作维度 (默认: 8)')
@@ -173,7 +173,9 @@ async def main(args):
                 elapsed_time = time.time() - start_time
                 print(f"elapsed_time: {elapsed_time}")
                 if elapsed_time < 1:
-                    await asyncio.sleep(1 - elapsed_time)
+                    pass
+                    # TODO 先不sleep
+                    # await asyncio.sleep(1 - elapsed_time)
                 else:
                     await asyncio.sleep(1)
 

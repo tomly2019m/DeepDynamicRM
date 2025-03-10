@@ -336,7 +336,7 @@ class ReplayBuffer:
             torch.FloatTensor(self.rewards[indices]).unsqueeze(1).to(device),  # (B,1)
             torch.FloatTensor(self.next_service_states[indices]).to(device),  # (B,30,28,26)
             torch.FloatTensor(self.next_latency_states[indices]).to(device),  # (B,30,6)
-            torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1).to(device),  # (B,1)
+            torch.FloatTensor(self.dones[indices].astype(bool)).unsqueeze(1).to(device),  # (B,1)
         )
 
     def _validate_shape(self, data: np.ndarray, expected_shape: tuple, name: str):

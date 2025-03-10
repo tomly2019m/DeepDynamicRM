@@ -82,10 +82,12 @@ class SACD_agent:
                 dim=1,
                 keepdim=True,
             )  # [b,1]
-            target_Q = r + (~dw) * self.gamma * v_next
+            target_Q = r + (1 - dw) * self.gamma * v_next
         """Update soft Q net"""
         q1_all, q2_all = self.q_critic(service, latency)  # [b,a_dim]
-        q1, q2 = q1_all.gather(1, a), q2_all.gather(1, a)  # [b,1]
+        a = a.long().unsqueeze(-1)  # 增加维度 [batch_size] => [batch_size, 1]
+        q1 = q1_all.gather(1, a)
+        q2 = q2_all.gather(1, a)
         q_loss = F.mse_loss(q1, target_Q) + F.mse_loss(q2, target_Q)
         self.q_critic_optimizer.zero_grad()
         q_loss.backward()
@@ -188,5 +190,119 @@ def test_select_action():
     print("测试通过！select_action函数工作正常。")
 
 
+def test_train():
+    """
+    测试train函数是否正常工作
+    参数设置参考main.py中的argparse配置
+    """
+    import numpy as np
+    import torch
+    from torch.utils.checkpoint import checkpoint
+
+    # ================== 参数设置 ==================
+    args = {
+        'service_num': 28,
+        'service_feat_dim': 26,
+        'latency_feat_dim': 6,
+        'time_steps': 30,
+        'seed': 1024,
+        'exp_noise': 1.0,
+        'init_noise': 1.0,
+        'noise_steps': 5000,
+        'final_noise': 0.02,
+        'hidden_dim': 128,
+        'fc_width': 256,
+        'gamma': 0.99,
+        'tau': 0.005,
+        'lr': 1e-4,
+        'batch_size': 256,
+        'adaptive_alpha': True,
+        'stop_steps': 100,  # 缩短测试步数
+        'replay_size': int(1e6),
+        'alpha': 0.2,
+        'random_steps': 500,
+        'action_dim': 8,
+        'update_steps': 1000,
+        'dvc': "cuda" if torch.cuda.is_available() else "cpu"
+    }
+
+    # ================== 初始化智能体 ==================
+    agent = SACD_agent(**args)
+
+    # ================== 生成模拟数据填充回放缓冲区 ==================
+    num_samples = max(2 * args['batch_size'], args['random_steps'])
+    print(f"Generating {num_samples} simulated experiences...")
+
+    for _ in range(num_samples):
+        # 生成随机服务数据 [T, S, F]
+        service_data = np.random.randn(args['time_steps'], args['service_num'],
+                                       args['service_feat_dim']).astype(np.float32)
+
+        # 生成随机延迟数据 [T, D]
+        latency_data = np.random.randn(args['time_steps'], args['latency_feat_dim']).astype(np.float32)
+
+        # 随机生成动作、奖励、终止标志
+        action = np.random.randint(0, args['action_dim'])
+        reward = np.random.randn()
+        done = np.random.rand() < 0.05  # 5%概率终止
+
+        # 添加至回放缓冲区
+        agent.replay_buffer.add_experience(
+            service_data,
+            latency_data,
+            action,
+            reward,
+            service_data.copy(),  # 简化：next_state=state
+            latency_data.copy(),
+            done)
+
+    # ================== 训练验证 ==================
+    print("\nStart training test...")
+    initial_actor_params = [p.clone() for p in agent.actor.parameters()]
+    initial_critic_params = [p.clone() for p in agent.q_critic.parameters()]
+
+    loss_history = []
+    alpha_history = []
+
+    for step in range(50):  # 运行50次训练步骤
+        agent.train()
+
+        # 记录训练指标
+        if hasattr(agent, 'alpha'):
+            alpha_history.append(agent.alpha)
+
+        # 每10步打印状态
+        if step % 10 == 0:
+            status = f"Step {step+1}/50"
+            if loss_history:
+                status += f" | Latest Loss: {loss_history[-1]:.4f}"
+            if alpha_history:
+                status += f" | Alpha: {alpha_history[-1]:.4f}"
+            print(status)
+
+    # ================== 验证训练效果 ==================
+    # 1. 检查网络参数是否更新
+    params_changed = any(not torch.equal(p1, p2) for p1, p2 in zip(initial_actor_params, agent.actor.parameters()))
+    print(f"\nActor parameters changed: {params_changed}")
+
+    params_changed = any(not torch.equal(p1, p2) for p1, p2 in zip(initial_critic_params, agent.q_critic.parameters()))
+    print(f"Critic parameters changed: {params_changed}")
+
+    # 2. 检查熵系数调整是否生效
+    if args['adaptive_alpha']:
+        print(f"\nAlpha values during training: {alpha_history[-5:]}...")
+        assert abs(alpha_history[-1] - alpha_history[0]) > 0.01, "Alpha not adapting!"
+
+    # 3. 检查目标网络更新
+    if agent.train_counter >= args['update_steps']:
+        target_diff = sum((t_p - q_p).abs().sum().item()
+                          for t_p, q_p in zip(agent.q_critic_target.parameters(), agent.q_critic.parameters()))
+        print(f"Target network difference: {target_diff:.4f}")
+        assert target_diff > 0, "Target network not updating"
+
+    print("\n测试通过！train函数工作正常。")
+
+
 if __name__ == "__main__":
-    test_select_action()
+    # test_select_action()
+    test_train()
