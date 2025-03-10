@@ -9,8 +9,6 @@ import time
 import asyncio
 from typing import Dict, Tuple
 import paramiko
-from sync import distribute_project
-from MAB import UCB_Bandit
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -19,6 +17,8 @@ sys.path.append(f"{PROJECT_ROOT}/deploy")
 from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
+from communication.sync import distribute_project
+from communication.MAB import UCB_Bandit
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time", type=int, default=15, help="experiment time")

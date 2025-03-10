@@ -6,30 +6,43 @@ import argparse
 import torch
 
 
+class Permute(nn.Module):
+
+    def __init__(self, *dims):
+        super(Permute, self).__init__()
+        self.dims = dims
+
+    def forward(self, x):
+        return x.permute(*self.dims)
+
+
 class SAC_StateEncoder(nn.Module):
     """SAC专用的轻量级状态编码器，融合服务和延迟特征"""
 
     def __init__(self, service_feature_dim=26, latency_feature_dim=6, time_steps=30, service_num=28, hidden_dim=128):
         super().__init__()
 
-        # 服务特征轻量编码 (处理形状: B,T,S,F)
+        # 服务特征轻量编码 (处理形状: B, T, S, F)
         self.service_encoder = nn.Sequential(
             nn.Conv2d(
                 in_channels=time_steps,  # 时间维度作为通道
                 out_channels=32,
                 kernel_size=(3, 3),
-                padding=1),
+                padding=1),  # (B, T, S, F) -> (B, 32, S, F)
+            Permute(0, 2, 1, 3),  # (B, 32, S, F) -> (B, S, 32, F)
             nn.ReLU(),
-            nn.Flatten(start_dim=2),  # 保持服务维度
-            nn.Linear(32 * service_feature_dim, 64),
+            nn.Flatten(start_dim=2),  # (B, S, 32, F) -> (B, S, 32 * F)
+            nn.Linear(32 * service_feature_dim, 64),  # (B, S, 32 * F) -> (B, S, 64)
             nn.LayerNorm(64),
             nn.ReLU(),
-            nn.Linear(64, hidden_dim // 2))
+            nn.Linear(64, hidden_dim // 2))  # (B, S, 64) -> (B, S, hidden_dim // 2)
 
         # 延迟特征时序编码 (处理形状: B,T,D)
         self.latency_encoder = nn.Sequential(
-            nn.Linear(latency_feature_dim, 32), nn.ReLU(),
-            nn.LSTM(input_size=32, hidden_size=hidden_dim // 2, num_layers=1, batch_first=True))
+            nn.Linear(latency_feature_dim, 32),
+            nn.ReLU(),  # (B, T, D) -> (B, T, 32)
+            nn.LSTM(input_size=32, hidden_size=hidden_dim // 2, num_layers=1,
+                    batch_first=True))  # (B, T, 32) -> (B, T, 64)
         self.latency_proj = nn.Linear(hidden_dim // 2, hidden_dim // 2)
 
         # 特征融合层
@@ -39,15 +52,15 @@ class SAC_StateEncoder(nn.Module):
         """处理两种输入并生成联合特征"""
         # 服务特征处理 (B,T,S,F) → (B,H//2)
         B, T, S, F = service_data.size()
-        service_feat = self.service_encoder(service_data.permute(0, 1, 3, 2))  # Conv2d需要通道在dim1
-        service_feat = service_feat.mean(dim=2)  # 聚合服务维度
+        service_feat = self.service_encoder(service_data)  # [B, T, S, F] -> [B, S, 64]
+        service_feat = service_feat.mean(dim=1)  # [B, S, 64] -> [B, 64]
 
         # 延迟特征处理 (B,T,D) → (B,H//2)
         latency_out, _ = self.latency_encoder(latency_data.view(B, T, -1))
-        latency_feat = self.latency_proj(latency_out[:, -1, :])  # 取最后时间步
+        latency_feat = self.latency_proj(latency_out.mean(dim=1))  # 取所有时间步的平均 （B, 64）-> (B, 64)
 
         # 特征融合
-        combined = torch.cat([service_feat, latency_feat], dim=1)
+        combined = torch.cat([service_feat, latency_feat], dim=1)  # (B, 128)
         return self.fusion(combined)
 
 

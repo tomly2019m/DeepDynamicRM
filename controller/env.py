@@ -14,8 +14,6 @@ import paramiko
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn.functional as F
-from monitor.data_collector import concat_data, process_data, transform_data
-from mylocust.util.get_latency_data import get_latest_latency
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -24,18 +22,21 @@ from communication.master import SlaveConnection
 from predictor.slo_predictor import OnlineScaler
 from monitor.data_collector import *
 from predictor.slo_predictor import DynamicSLOPredictor
+from monitor.data_collector import concat_data, process_data, transform_data
+from mylocust.util.get_latency_data import get_latest_latency
 
 
 class Env:
 
-    def __init__(self, connections, exp_time=300, window_size=30):
+    def __init__(self, window_size=30):
 
         self.config_path = f"{PROJECT_ROOT}/communication/comm.json"
         # 读取配置文件
         self.master, self.slaves, self.port = self._load_config(self.config_path)
+        print(self.master, self.slaves, self.port)
 
         self.username = "tomly"
-        self._setup_slaves()
+        # self._setup_slaves()
         # 等待监听进程拉起
         time.sleep(5)
 
@@ -81,6 +82,9 @@ class Env:
         # 当前的cpu状态，从gathered中获取
         self.cpu_state = {}
 
+        # locust进程的pid
+        self.locust_pid = None
+
         # 预测器
         self.predictor = DynamicSLOPredictor(service_mode="hier_attention")
         self._load_predictor()
@@ -97,14 +101,16 @@ class Env:
 
         self.every_episode_steps = 2000
 
-        # 预填充buffer
-        self.warmup()
-
     # 加载集群配置文件
     def _load_config(self, path):
         with open(path, "r") as f:
             config = json.load(f)
-        return config["master"], config["slaves"], config["port"]
+            hosts = config["slaves"]
+            port = config["port"]
+            slaves = [(host, port) for host in hosts]
+            print(config["master"], slaves, port)
+            # raise Exception("test")
+            return config["master"], slaves, port
 
     def _load_service_default_config(self):
         """
@@ -177,7 +183,7 @@ class Env:
 
     def _load_scalers(self):
         """加载预测器训练好的标准化器"""
-        save_dir = f"{PROJECT_ROOT}/predictor/data"
+        save_dir = f"{PROJECT_ROOT}/predictor/model"
 
         try:
             # 加载服务级标准化器
@@ -215,7 +221,7 @@ class Env:
 
             # 明确指定utf-8编码
             with action_path.open('r', encoding='utf-8') as f:
-                actions = json.load(f)
+                self.actions = json.load(f)
 
         except FileNotFoundError as e:
             print(f"关键错误: {str(e)}")
@@ -241,32 +247,12 @@ class Env:
     # 建立slave连接
     async def create_connections(self):
         """异步建立所有Slave连接并初始化"""
-        tasks = []
-
-        # 遍历配置中的slave节点
-        for host in self.slaves:
-            slave_addr = (host, self.port)
-
-            # 创建连接对象
-            conn = SlaveConnection(host, self.port)
-
-            try:
-                # 执行异步连接
-                await conn.connect()
-                self.connections[slave_addr] = conn
-
-                # 创建初始化任务
-                tasks.append(asyncio.create_task(conn.send_command("init")))
-
-            except ConnectionError as e:
-                print(f"连接 {host}:{self.port} 失败: {str(e)}")
-                continue
-
-        # 批量执行初始化命令
-        if tasks:
-            await asyncio.gather(*tasks)
-
-        print(f"成功建立 {len(self.connections)} 个Slave连接")
+        for slave_host, slave_port in self.slaves:
+            connection = SlaveConnection(slave_host, slave_port)
+            await connection.connect()
+            self.connections[(slave_host, slave_port)] = connection
+            print("初始化slave连接")
+            connection.send_command_sync("init")
 
     def close_all_connections(self):
         """关闭所有连接"""
@@ -276,8 +262,25 @@ class Env:
     def _load_predictor(self):
         """加载预测器"""
         model_path = Path(PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
-        self.predictor.load_state_dict(torch.load(model_path))
+
+        # 加载完整的检查点文件
+        checkpoint = torch.load(model_path)
+
+        # 检查是否包含model_state键
+        if "model_state" in checkpoint:
+            # 只加载模型状态部分
+            self.predictor.load_state_dict(checkpoint["model_state"])
+        else:
+            # 尝试直接加载（兼容旧格式）
+            try:
+                self.predictor.load_state_dict(checkpoint)
+            except Exception as e:
+                print(f"模型加载失败: {str(e)}")
+                print("请确保模型文件格式正确，或重新训练模型")
+                raise
+
         self.predictor.eval()
+        print("预测器加载成功")
 
     def gather_data(self):
         """数据采集接口 获取一个时间步的数据"""
@@ -370,7 +373,7 @@ class Env:
         processed_serv = np.zeros_like(combined_data)
         for s in range(28):  # 遍历每个服务
             # 提取特征 (10,25)
-            features = service_data[:, s, :25]
+            features = combined_data[:, s, :25]
             scaled = self.scalers["service"][s].transform(features)  # 输入 (10,25)
             processed_serv[:, s, :25] = scaled
         # 保留第26个特征（replica_data）不归一化
@@ -393,6 +396,7 @@ class Env:
             done: 是否结束
         """
         # 1. 执行动作 会更新self.allocate_dict
+        print(f"执行动作: {action}")
         self._execute_action(action)
 
         # 2. 采集新数据
@@ -616,15 +620,27 @@ class Env:
 
     async def reset(self):
         """重置环境"""
+        print("重置环境")
+        print("停止locust")
         self.stop_locust()
         self.locust_pid = None
         # 清空缓存
+        print("清空缓存")
         self.buffer.clear()
         self.latency_buffer.clear()
         self.config_buffer.clear()
         self.allocation_history.clear()
         # 重新启动locust
-        await self.start_locust()
-        time.sleep(30)
-        self.warmup()
-        return self.get_state_and_latency()
+        print("重新启动locust")
+        try:
+            await self.start_locust()
+            print("等待30秒")
+            time.sleep(3)
+            print("预热")
+            self.warmup()
+            print("返回状态")
+            return self.get_state_and_latency()
+        except Exception as e:
+            print(f"重置环境失败: {str(e)}")
+        finally:
+            self.stop_locust()

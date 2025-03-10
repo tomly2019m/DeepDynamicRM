@@ -23,6 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='SACD算法参数配置')
 
     # ================== 环境特征参数 ==================
+    parser.add_argument('--service-num', type=int, default=28, help='服务数量 (默认: 28)')
     parser.add_argument('--service-feat-dim', type=int, default=26, help='服务特征维度 (默认: 26)')
     parser.add_argument('--latency-feat-dim', type=int, default=6, help='延迟特征维度 (默认: 6)')
     parser.add_argument('--time-steps', type=int, default=30, help='时间序列长度 (默认: 30)')
@@ -47,6 +48,7 @@ def parse_args():
     parser.add_argument('--random-steps', type=int, default=1000, help='纯随机探索步数 (默认: 1000)')
     parser.add_argument('--action-dim', type=int, default=8, help='动作维度 (默认: 8)')
     parser.add_argument('--update-steps', type=int, default=1000, help='更新步数 (默认: 1000)')
+    parser.add_argument('--dvc', type=str, default="cuda", help='设备 (默认: cuda)')
 
     # ================== 运行模式 ==================
     parser.add_argument('--train', action='store_true', help='训练模式 (默认: 验证模式)')
@@ -168,7 +170,7 @@ if __name__ == "__main__":
     print(f"学习率: {args.lr:.0e}")
     print(f"批大小: {args.batch_size}")
     print(f"随机探索步数: {args.random_steps}")
-    print(f"总探索步数: {args.exploration_steps}")
+    print(f"总探索步数: {args.stop_steps}")
     print(f"动作维度: {args.action_dim}")
     print(f"训练模式: {args.train}")
     print(f"服务特征维度: {args.service_feat_dim}")
@@ -178,4 +180,4 @@ if __name__ == "__main__":
     print(f"全连接层宽度: {args.fc_width}")
     print(f"折扣因子: {args.gamma}")
     print(f"目标网络软更新系数: {args.tau}")
-    asyncio.run(main())
+    asyncio.run(main(args))

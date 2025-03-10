@@ -15,13 +15,10 @@ class SACD_agent:
         self.tau = 0.005
         self.train_counter = 0
         self.H_mean = 0
-        self.replay_buffer = ReplayBuffer(
-            service_shape=(self.time_steps, self.service_num, self.service_feat_dim),
-            latency_shape=(self.time_steps, self.latency_feat_dim),
-            dvc=self.dvc,
-            buffer_size=int(1e6),
-            num_actions=self.action_dim,
-        )
+        self.replay_buffer = ReplayBuffer(service_shape=(self.time_steps, self.service_num, self.service_feat_dim),
+                                          latency_shape=(self.time_steps, self.latency_feat_dim),
+                                          buffer_size=int(1e6),
+                                          num_actions=self.action_dim)
 
         self.actor = Policy_Net(num_actions=self.action_dim,
                                 service_feature_dim=self.service_feat_dim,
@@ -143,3 +140,52 @@ class SACD_agent:
         save_path = f"./model/{time}/"
         self.actor.load_state_dict(torch.load(f"{save_path}/sacd_actor_{time}_{steps}.pth", map_location=self.dvc))
         self.q_critic.load_state_dict(torch.load(f"{save_path}/sacd_critic_{time}_{steps}.pth", map_location=self.dvc))
+
+
+def test_select_action():
+    """
+    测试select_action函数是否正常工作
+    参数设置：T=30, S=28, F=26, D=6, 动作空间=8
+    """
+    import numpy as np
+    import torch
+
+    # 创建一个SACD_agent实例
+    agent = SACD_agent(action_dim=8,
+                       dvc="cuda" if torch.cuda.is_available() else "cpu",
+                       time_steps=30,
+                       service_num=28,
+                       service_feat_dim=26,
+                       latency_feat_dim=6,
+                       hidden_dim=128,
+                       fc_width=256,
+                       lr=0.001,
+                       gamma=0.99,
+                       alpha=0.2,
+                       update_steps=1000,
+                       batch_size=64,
+                       exp_noise=0.2,
+                       adaptive_alpha=True)
+
+    # 创建模拟的服务状态数据 (T=30, S=28, F=26)
+    service_state = np.random.rand(30, 28, 26).astype(np.float32)
+
+    # 创建模拟的延迟状态数据 (T=30, D=6)
+    latency_state = np.random.rand(30, 6).astype(np.float32)
+
+    # 测试确定性动作选择
+    deterministic_action = agent.select_action(service_state, latency_state, deterministic=True)
+    print(f"确定性动作: {deterministic_action}")
+    assert 0 <= deterministic_action < 8, "确定性动作超出范围"
+
+    # 测试随机动作选择
+    agent.exp_noise = 0.2  # 设置探索噪声
+    random_action = agent.select_action(service_state, latency_state, deterministic=False)
+    print(f"随机动作: {random_action}")
+    assert 0 <= random_action < 8, "随机动作超出范围"
+
+    print("测试通过！select_action函数工作正常。")
+
+
+if __name__ == "__main__":
+    test_select_action()
