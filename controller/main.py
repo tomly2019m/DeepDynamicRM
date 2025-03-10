@@ -6,7 +6,7 @@ import os
 import random
 import sys
 import time
-from utils import LinearSchedule
+from utils import LinearSchedule, str2bool
 from copy import deepcopy
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,13 +47,15 @@ def parse_args():
     parser.add_argument('--adaptive-alpha', action='store_true', help='启用自动熵系数调整 (默认: False)')
     parser.add_argument('--stop-steps', type=int, default=20 * 3600, help='最大训练步数 (默认: 72000)')
     parser.add_argument('--replay-size', type=int, default=int(1e6), help='回放缓冲区容量 (默认: 1e6)')
-    parser.add_argument('--random-steps', type=int, default=1000, help='纯随机探索步数 (默认: 1000)')
+    parser.add_argument('--alpha', type=float, default=0.2, help='init alpha')
+    parser.add_argument('--adaptive_alpha', type=str2bool, default=True, help='Use adaptive alpha turning')
+    # TODO 修改为1000
+    parser.add_argument('--random-steps', type=int, default=500, help='纯随机探索步数 (默认: 1000)')
     parser.add_argument('--action-dim', type=int, default=8, help='动作维度 (默认: 8)')
     parser.add_argument('--update-steps', type=int, default=1000, help='更新步数 (默认: 1000)')
     parser.add_argument('--dvc', type=str, default="cuda", help='设备 (默认: cuda)')
 
     # ================== 运行模式 ==================
-    parser.add_argument('--train', action='store_true', help='训练模式 (默认: 验证模式)')
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
 
     return parser.parse_args()
@@ -105,8 +107,6 @@ async def main(args):
             episode_dir = os.path.join(exp_data_path, f"episode{episode_num:03d}")
             os.makedirs(episode_dir, exist_ok=True)
 
-            start_time = time.time()
-
             # 初始化step记录文件
             step_csv_path = os.path.join(episode_dir, "step_data.csv")
             with open(step_csv_path, 'w', newline='') as f:
@@ -119,13 +119,21 @@ async def main(args):
             episode_step = 0
             total_reward = 0
             while not done:
+                start_time = time.time()
                 action = agent.select_action(state, latency, deterministic=False)
 
                 # 执行动作
                 next_state, next_latency, reward, done = env.step(action)
-                raw_latency = get_latest_latency(next_latency)
+                raw_latency = get_latest_latency()
                 print(f"action: {action}, reward: {reward}, latency: {raw_latency}")
                 agent.replay_buffer.add_experience(state, latency, action, reward, next_state, next_latency, done)
+
+                state = next_state
+                latency = next_latency
+                if np.isnan(reward):
+                    print(f"reward is nan, skip this step")
+                    continue
+
                 total_reward += reward
 
                 original_cpu_allocate = deepcopy(env.allocate_dict)
@@ -162,8 +170,12 @@ async def main(args):
                 if total_steps % 1000 == 0:
                     agent.save(time_str, total_steps)
                 # 如果时间小于1秒，则等待
-                while time.time() - start_time < 1:
-                    time.sleep(0.01)
+                elapsed_time = time.time() - start_time
+                print(f"elapsed_time: {elapsed_time}")
+                if elapsed_time < 1:
+                    await asyncio.sleep(1 - elapsed_time)
+                else:
+                    await asyncio.sleep(1)
 
             with open(total_reward_path, 'a', newline='') as f:
                 writer = csv.writer(f)
@@ -189,7 +201,6 @@ if __name__ == "__main__":
     print(f"随机探索步数: {args.random_steps}")
     print(f"总探索步数: {args.stop_steps}")
     print(f"动作维度: {args.action_dim}")
-    print(f"训练模式: {args.train}")
     print(f"服务特征维度: {args.service_feat_dim}")
     print(f"延迟特征维度: {args.latency_feat_dim}")
     print(f"时间序列长度: {args.time_steps}")

@@ -4,3 +4,4 @@ predictor/model/
 **/exp_data/
 **/logs/
 **/checkpoints/
+controller/model/

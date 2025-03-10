@@ -325,15 +325,18 @@ class ReplayBuffer:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """采样批次数据"""
         indices = np.random.choice(self.current_size, batch_size, replace=False)
-
+        
+        # 获取设备信息
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         return (
-            torch.FloatTensor(self.service_states[indices]),  # (B,30,28,26)
-            torch.FloatTensor(self.latency_states[indices]),  # (B,30,6)
-            torch.LongTensor(self.actions[indices]),  # (B,)
-            torch.FloatTensor(self.rewards[indices]).unsqueeze(1),  # (B,1)
-            torch.FloatTensor(self.next_service_states[indices]),  # (B,30,28,26)
-            torch.FloatTensor(self.next_latency_states[indices]),  # (B,30,6)
-            torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1),  # (B,1)
+            torch.FloatTensor(self.service_states[indices]).to(device),  # (B,30,28,26)
+            torch.FloatTensor(self.latency_states[indices]).to(device),  # (B,30,6)
+            torch.LongTensor(self.actions[indices]).to(device),  # (B,)
+            torch.FloatTensor(self.rewards[indices]).unsqueeze(1).to(device),  # (B,1)
+            torch.FloatTensor(self.next_service_states[indices]).to(device),  # (B,30,28,26)
+            torch.FloatTensor(self.next_latency_states[indices]).to(device),  # (B,30,6)
+            torch.FloatTensor(self.dones[indices].astype(np.float32)).unsqueeze(1).to(device),  # (B,1)
         )
 
     def _validate_shape(self, data: np.ndarray, expected_shape: tuple, name: str):

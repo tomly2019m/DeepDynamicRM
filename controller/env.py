@@ -347,8 +347,9 @@ class Env:
         return ndarray
 
     def warmup(self):
-        """预热，倒计时30秒填充buffer"""
-        countdown = self.window_size
+        """预热，倒计时40秒填充buffer"""
+        # 多填充10秒数据
+        countdown = self.window_size + 10
 
         while countdown > 0:
             data, latency = self.gather_data()
@@ -406,7 +407,7 @@ class Env:
             done: 是否结束
         """
         # 1. 执行动作 会更新self.allocate_dict
-        print(f"执行动作: {action}")
+        print(f"执行动作: {action}, {self.actions[action]}")
         self._execute_action(action)
 
         # 2. 采集新数据
@@ -429,8 +430,8 @@ class Env:
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
             pv = probs[0, 5].item()  # 索引5对应第六类
-        print("延迟概率分布：")
-        print(probs)
+        print(f"延迟概率分布：{probs}")
+        print(f"违例概率: {pv * 100:.2f}%")
         print(f"当前延迟: {latency}")
         p99_latency = latency[-2]
         reward = self._calculate_reward(pv, p99_latency)

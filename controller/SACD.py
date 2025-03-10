@@ -41,6 +41,7 @@ class SACD_agent:
         for p in self.q_critic_target.parameters():
             p.requires_grad = False
 
+        self.alpha = kwargs.get('alpha', 0.2)  # 默认值为0.2
         if self.adaptive_alpha:
             # use 0.6 because the recommended 0.98 will cause alpha explosion.
             self.target_entropy = 0.6 * (-np.log(1 / self.action_dim))  # H(discrete)>0
@@ -67,7 +68,7 @@ class SACD_agent:
 
     def train(self):
         self.train_counter += 1
-        (service, latency), a, r, (service_next, latency_next), dw = self.replay_buffer.sample(self.batch_size)
+        service, latency, a, r, service_next, latency_next, dw = self.replay_buffer.sample_batch(self.batch_size)
 
         # ------------------------------------------ Train Critic ----------------------------------------#
         """Compute the target soft Q value"""
