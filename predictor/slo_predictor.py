@@ -593,7 +593,8 @@ class SLOTrainer:
             device='cuda',
             class_weights=None,  # 新增参数：类别权重
             lr=2e-5,
-            batch_size=64):
+            batch_size=64,
+            weight_decay=1e-4):
         """
         参数:
             service_mode: 'hier_attention' 或 'mutil_scale'
@@ -612,7 +613,7 @@ class SLOTrainer:
         self.criterion = nn.CrossEntropyLoss(
             weight=class_weights.to(self.device) if class_weights is not None else None)
 
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         self.scaler_manager = None
 
     def _init_model(self, mode):
@@ -840,7 +841,7 @@ def analyze_feature_importance(model, sample):
     shap.summary_plot(shap_values, sample)
 
 
-def main(epochs, learning_rate, batch_size, service_mode):
+def main(epochs, learning_rate, batch_size, service_mode, weight_decay):
     # 导入必要的模块
     import time
     import os
@@ -905,6 +906,9 @@ def main(epochs, learning_rate, batch_size, service_mode):
         "threshold": 500,
         "service_mode": service_mode,
         "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "epochs": epochs,
+        "weight_decay": weight_decay,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
         "class_distribution": {
             int(k): int(v)
@@ -922,7 +926,8 @@ def main(epochs, learning_rate, batch_size, service_mode):
         device='cuda' if torch.cuda.is_available() else 'cpu',
         class_weights=class_weights,  # 传入类别权重
         batch_size=batch_size,
-        lr=learning_rate)
+        lr=learning_rate,
+        weight_decay=weight_decay)
 
     # 准备数据（添加维度验证）
     try:
@@ -1083,27 +1088,19 @@ def main(epochs, learning_rate, batch_size, service_mode):
     writer.close()
 
 
+import argparse
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Train the SLO Predictor model.")
+    parser.add_argument("--epochs", type=int, default=300, help="Number of training epochs.")
+    parser.add_argument("--learning-rate", type=float, default=1e-5, help="Learning rate.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size.")
+    parser.add_argument("--service-mode", type=str, default="hier_attention", help="Service mode.")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    parameters = [{
-        "epochs": 300,
-        "learning_rate": 2e-5,
-        "batch_size": 128,
-        "service_mode": "hier_attention",
-    }, {
-        "epochs": 300,
-        "learning_rate": 2e-5,
-        "batch_size": 128,
-        "service_mode": "multi_scale",
-    }, {
-        "epochs": 300,
-        "learning_rate": 1e-5,
-        "batch_size": 64,
-        "service_mode": "hier_attention",
-    }, {
-        "epochs": 300,
-        "learning_rate": 1e-5,
-        "batch_size": 64,
-        "service_mode": "multi_scale",
-    }]
-    for parameter in parameters:
-        main(**parameter)
+    args = parse_arguments()
+    main(args.epochs, args.learning_rate, args.batch_size, args.service_mode, args.weight_decay)
