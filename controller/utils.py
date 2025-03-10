@@ -57,6 +57,8 @@ class SAC_StateEncoder(nn.Module):
 
         # 延迟特征处理 (B,T,D) → (B,H//2)
         latency_out, _ = self.latency_encoder(latency_data.view(B, T, -1))
+        self.latency_encoder[2].flatten_parameters()  # 在LSTM前调用flatten_parameters()
+        latency_out, _ = self.latency_encoder[2](latency_out)
         latency_feat = self.latency_proj(latency_out.mean(dim=1))  # 取所有时间步的平均 （B, 64）-> (B, 64)
 
         # 特征融合
@@ -325,10 +327,10 @@ class ReplayBuffer:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """采样批次数据"""
         indices = np.random.choice(self.current_size, batch_size, replace=False)
-        
+
         # 获取设备信息
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         return (
             torch.FloatTensor(self.service_states[indices]).to(device),  # (B,30,28,26)
             torch.FloatTensor(self.latency_states[indices]).to(device),  # (B,30,6)
@@ -348,7 +350,6 @@ class ReplayBuffer:
         """动作验证"""
         if not (0 <= value < self.num_actions):
             raise ValueError(f"{name} 超出范围，允许的最大值：{self.num_actions - 1}")
-
 
     @property
     def is_full(self) -> bool:

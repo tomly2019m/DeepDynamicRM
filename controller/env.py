@@ -98,9 +98,9 @@ class Env:
 
         self.steps = 0  # 统计step
 
-        self.done_steps = 20 * 2000
+        self.done_steps = 20 * 3600
 
-        self.every_episode_steps = 2000
+        self.every_episode_steps = 1000
 
     # 加载集群配置文件
     def _load_config(self, path):
@@ -591,7 +591,7 @@ class Env:
             # 总惩罚取负（原始设计全为负数奖励）
             return -(delay_penalty + ongoing_penalty)
 
-    async def start_locust(self):
+    async def start_locust(self, user_count):
         locust_cmd = [
             "locust",  # 命令名称
             "-f",  # 参数：指定locust文件路径
@@ -599,7 +599,7 @@ class Env:
             "--host",  # 参数：目标主机
             "http://127.0.0.1:8080",
             "--users",  # 用户数参数
-            "50",
+            f"{user_count}",
             "--csv",  # 输出CSV文件
             f"{PROJECT_ROOT}/mylocust/locust_log",
             "--headless",  # 无头模式
@@ -634,6 +634,7 @@ class Env:
 
     async def reset(self):
         """重置环境"""
+        user_count_list = [50, 100, 150, 200, 250, 300, 350, 400, 450]
         print("重置环境")
         print("停止locust")
         self.stop_locust()
@@ -646,10 +647,13 @@ class Env:
         # 重新启动locust
         print("重新启动locust")
         try:
-            await self.start_locust()
+            # 随机选择一个用户数
+            user_count = np.random.choice(user_count_list)
+            await self.start_locust(user_count)
+            print(f"随机选择用户数: {user_count}")
             print("等待30秒")
             # TODO 把预热时间改为30秒
-            time.sleep(3)
+            time.sleep(30)
             print("预热")
             self.warmup()
             print("返回状态")
