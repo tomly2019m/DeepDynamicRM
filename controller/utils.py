@@ -40,9 +40,11 @@ class SAC_StateEncoder(nn.Module):
         # 延迟特征时序编码 (处理形状: B,T,D)
         self.latency_encoder = nn.Sequential(
             nn.Linear(latency_feature_dim, 32),
-            nn.ReLU(),  # (B, T, D) -> (B, T, 32)
-            nn.LSTM(input_size=32, hidden_size=hidden_dim // 2, num_layers=1,
-                    batch_first=True))  # (B, T, 32) -> (B, T, 64)
+            nn.ReLU()  # (B, T, D) -> (B, T, 32)
+        )
+        # (B, T, 32) -> (B, T, 64)
+        self.lstm = nn.LSTM(input_size=32, hidden_size=hidden_dim // 2, num_layers=1, batch_first=True)
+
         self.latency_proj = nn.Linear(hidden_dim // 2, hidden_dim // 2)
 
         # 特征融合层
@@ -56,9 +58,11 @@ class SAC_StateEncoder(nn.Module):
         service_feat = service_feat.mean(dim=1)  # [B, S, 64] -> [B, 64]
 
         # 延迟特征处理 (B,T,D) → (B,H//2)
-        latency_out, _ = self.latency_encoder(latency_data.view(B, T, -1))
-        self.latency_encoder[2].flatten_parameters()  # 在LSTM前调用flatten_parameters()
-        latency_out, _ = self.latency_encoder[2](latency_out)
+        latency_out = self.latency_encoder(latency_data.view(B, T, -1))
+        self.lstm.flatten_parameters()
+        latency_out, _ = self.lstm(latency_out)
+        # self.latency_encoder[2].flatten_parameters()  # 在LSTM前调用flatten_parameters()
+        # latency_out, _ = self.latency_encoder[2](latency_out)
         latency_feat = self.latency_proj(latency_out.mean(dim=1))  # 取所有时间步的平均 （B, 64）-> (B, 64)
 
         # 特征融合

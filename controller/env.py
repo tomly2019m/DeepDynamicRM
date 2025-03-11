@@ -62,7 +62,7 @@ class Env:
         self.actions = []
         self._load_actions()
         # 最低分配数量
-        self.min_allocate = 25
+        self.min_allocate = 15
 
         # 保存资源配置历史
         self.allocation_history = []
@@ -644,6 +644,8 @@ class Env:
         self.latency_buffer.clear()
         self.config_buffer.clear()
         self.allocation_history.clear()
+        # 每个回合 重置cpu分配方案 防止上一个回合的cpu分配方案影响下一个回合
+        self._load_service_default_config()
         # 重新启动locust
         print("重新启动locust")
         try:
