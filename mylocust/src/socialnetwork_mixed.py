@@ -180,13 +180,13 @@ class LoadConfig:
         "daynight": {
             "period": 250,
             "base_iat": 1,
-            "peak_iat": 4,
+            "peak_iat": 1.5,
             "day_start": 0.2,
             "day_duration": 0.6
         },
         "burst": {
-            "base_iat": 1.0,
-            "burst_iat": 0.666,
+            "base_iat": 1.3,
+            "burst_iat": 0.9,
             "cycle_duration": 250,
             "burst_duration": 50,
             "min_interval": 150

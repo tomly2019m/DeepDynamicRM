@@ -94,6 +94,7 @@ class Env:
         self.w1, self.w2, self.w3, self.w4 = 0, 0, 0, 0
         self.pv = 0  # pv阈值
         self.threshold = 0  # SLO阈值
+        self.punish_factor = 360
         self._load_reward_config()
 
         self.steps = 0  # 统计step
@@ -575,21 +576,21 @@ class Env:
                 # 高风险区线性放大
                 risk_penalty = w2 * (2 * pv - 0.5)
 
-            return (resource_reward - risk_penalty) * (1 - latency / threshold)
+            return (resource_reward - risk_penalty) * (1 - latency / (threshold * 0.7))
 
         else:
             # --------------------------
             # 状态2：SLO已违例（紧急恢复模式）
             # --------------------------
             # 延迟超阈值惩罚（1.5次方梯度）
-            violation_degree = (latency - threshold) / threshold
+            violation_degree = (latency - threshold * 0.7) / (threshold * 0.7)
             delay_penalty = w3 * (violation_degree**1.5)
 
             # 持续未来风险惩罚
             ongoing_penalty = w4 * pv
 
             # 总惩罚取负（原始设计全为负数奖励）
-            return -(delay_penalty + ongoing_penalty)
+            return -(delay_penalty + ongoing_penalty) * self.punish_factor
 
     async def start_locust(self, user_count):
         locust_cmd = [

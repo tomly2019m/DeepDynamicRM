@@ -133,8 +133,16 @@ async def main(args):
 
     try:
         while total_steps < args.stop_steps:
+            # 先执行初始化分配
+            cpu_allocate = deepcopy(env.initial_allocation)
+            for service in cpu_allocate:
+                cpu_allocate[service] /= env.replica_dict[service]
+            for connection in connections.values():
+                connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
             # 重置环境
             state, latency = await env.reset()
+            
+
             done = False
 
             services = list(env.allocate_dict.keys())
