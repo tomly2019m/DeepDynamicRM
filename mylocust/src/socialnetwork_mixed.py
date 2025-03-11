@@ -186,7 +186,7 @@ class LoadConfig:
         },
         "burst": {
             "base_iat": 1.0,
-            "burst_iat": 0.5,
+            "burst_iat": 0.666,
             "cycle_duration": 250,
             "burst_duration": 50,
             "min_interval": 150

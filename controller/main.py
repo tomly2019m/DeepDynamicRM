@@ -52,7 +52,7 @@ def parse_args():
     # TODO 修改为1000
     parser.add_argument('--random-steps', type=int, default=1000, help='纯随机探索步数 (默认: 1000)')
     parser.add_argument('--action-dim', type=int, default=8, help='动作维度 (默认: 8)')
-    parser.add_argument('--update-steps', type=int, default=800, help='更新步数 (默认: 800)')
+    parser.add_argument('--update-steps', type=int, default=500, help='更新步数 (默认: 500)')
     parser.add_argument('--dvc', type=str, default="cuda", help='设备 (默认: cuda)')
 
     # ================== 运行模式 ==================

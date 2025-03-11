@@ -575,7 +575,7 @@ class Env:
                 # 高风险区线性放大
                 risk_penalty = w2 * (2 * pv - 0.5)
 
-            return resource_reward - risk_penalty
+            return (resource_reward - risk_penalty) * (1 - latency / threshold)
 
         else:
             # --------------------------
@@ -653,9 +653,9 @@ class Env:
             user_count = np.random.choice(user_count_list)
             await self.start_locust(user_count)
             print(f"随机选择用户数: {user_count}")
-            print("等待30秒")
-            # TODO 把预热时间改为30秒
-            time.sleep(30)
+            print("等待120秒")
+            # TODO 把预热时间改为120秒
+            time.sleep(120)
             print("预热")
             self.warmup()
             print("返回状态")
