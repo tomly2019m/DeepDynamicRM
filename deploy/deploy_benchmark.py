@@ -171,7 +171,7 @@ def deploy_benchmark():
 # 初始化socialnetwork数据
 def init_socialnetwork_data():
     bench_dir = args.bench_dir
-    script_path = os.path.join(bench_dir, "scripts", "setup_social_graph_init_data_sync.py")
+    script_path = os.path.join(bench_dir, "scripts", "setup_social_graph_init_data.py")
     command = f"python3 {script_path} {bench_dir}/datasets/social-graph/socfb-Reed98/socfb-Reed98.mtx"
     _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, command, stream_output=True)
     if err:

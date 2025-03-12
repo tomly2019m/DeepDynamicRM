@@ -40,6 +40,8 @@ class Env:
         # 等待监听进程拉起
         time.sleep(5)
 
+        self.episode_count = 0
+
         # 新增连接存储结构
         self.connections: Dict[Tuple[str, int], SlaveConnection] = {}
 
@@ -94,7 +96,7 @@ class Env:
         self.w1, self.w2, self.w3, self.w4 = 0, 0, 0, 0
         self.pv = 0  # pv阈值
         self.threshold = 0  # SLO阈值
-        self.punish_factor = 360
+        self.punish_factor = 4.5
         self._load_reward_config()
 
         self.steps = 0  # 统计step
@@ -560,7 +562,28 @@ class Env:
         threshold = self.threshold  # SLO延迟阈值
         allocated = sum(self.allocate_dict.values())  # 当前已分配CPU
 
-        if latency <= threshold:
+        def get_allocated_reward(allocated):
+            if allocated < 0:
+                return 0  # 负数CPU数量无效
+            elif 0 <= allocated <= self.max_cpu / 2:
+                # 使用平方根函数实现增速递减
+                return 5 * math.sqrt(allocated / (self.max_cpu / 2))
+            else:
+                return 5
+
+        def discount_factor(latency):
+            if latency <= threshold * 0.6:
+                return 1
+            else:
+                return (1 - latency / (threshold * 0.7))
+
+        def clip(x):
+            if x >= 10:
+                return 10
+            else:
+                return x
+
+        if latency < threshold * 0.7:
             # --------------------------
             # 状态1：SLO未违例（资源优化模式）
             # --------------------------
@@ -576,7 +599,7 @@ class Env:
                 # 高风险区线性放大
                 risk_penalty = w2 * (2 * pv - 0.5)
 
-            return (resource_reward - risk_penalty) * (1 - latency / (threshold * 0.7))
+            return (resource_reward - risk_penalty) * discount_factor(latency)
 
         else:
             # --------------------------
@@ -589,14 +612,14 @@ class Env:
             # 持续未来风险惩罚
             ongoing_penalty = w4 * pv
 
-            # 总惩罚取负（原始设计全为负数奖励）
-            return -(delay_penalty + ongoing_penalty) * self.punish_factor
+            # 总惩罚取负 鼓励分配更多资源
+            return -clip((delay_penalty + ongoing_penalty) * 4.5) + get_allocated_reward(allocated)
 
     async def start_locust(self, user_count):
         locust_cmd = [
             "locust",  # 命令名称
             "-f",  # 参数：指定locust文件路径
-            f"{PROJECT_ROOT}/mylocust/src/socialnetwork_mixed.py",  # 你的Locust文件路径
+            f"{PROJECT_ROOT}/mylocust/src/socialnetwork_mixed.py",
             "--host",  # 参数：目标主机
             "http://127.0.0.1:8080",
             "--users",  # 用户数参数
@@ -606,6 +629,8 @@ class Env:
             "--headless",  # 无头模式
             "-t",  # 测试时长
             f"{10 * 2000}s",
+            "-r",
+            "10"  # 每秒启动10个用户
         ]
 
         print(f"locust command:{locust_cmd}")
@@ -633,8 +658,20 @@ class Env:
         else:
             print("Locust未启动")
 
+    def reset_deploy(self):
+        time.sleep(10)
+        #重置实验环境
+        command = ("cd ~/DeepDynamicRM/deploy && "
+                   "~/miniconda3/envs/DDRM/bin/python3 "
+                   "deploy_benchmark.py")
+        execute_command(command, stream_output=True)
+
     async def reset(self):
         """重置环境"""
+        self.episode_count += 1
+        if self.episode_count % 4 == 0:
+            self.reset_deploy()
+
         user_count_list = [50, 100, 150, 200, 250, 300, 350, 400, 450]
         print("重置环境")
         print("停止locust")
