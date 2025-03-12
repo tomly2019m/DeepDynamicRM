@@ -287,19 +287,13 @@ def process_data(window_size=30, pred_window=5, threshold=500, save_scalers=True
     # 生成所有样本
     X_serv_all, X_lat_all, y_all = create_stage_samples(X_service, X_latency, raw_latency)
 
-    # ----------------------------------
-    # 按时间顺序划分数据集（样本已有序）
-    # ----------------------------------
+
     num_samples = len(y_all)
-
     indices = np.arange(num_samples)
-    np.random.shuffle(indices)  # 打乱索引顺序
-
-    # 使用打乱后的索引重新排列所有数据
+    np.random.shuffle(indices) 
     X_serv_all = X_serv_all[indices]
     X_lat_all = X_lat_all[indices]
     y_all = y_all[indices]
-
     train_end = int(num_samples * 0.8)
     val_end = int(num_samples * 0.9)
 

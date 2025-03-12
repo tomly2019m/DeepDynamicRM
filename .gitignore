@@ -6,3 +6,4 @@ predictor/model/
 **/checkpoints/
 controller/model/
 **/model/
+*.pkl

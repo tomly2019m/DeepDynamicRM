@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import pickle
 import signal
 import sys
 import time
@@ -21,6 +22,7 @@ sys.path.append(PROJECT_ROOT)
 from communication.master import SlaveConnection
 from predictor.slo_predictor import OnlineScaler
 from monitor.data_collector import *
+from monitor.shell import execute_command
 from predictor.slo_predictor import DynamicSLOPredictor
 from monitor.data_collector import concat_data, process_data, transform_data
 from mylocust.util.get_latency_data import get_latest_latency
@@ -64,8 +66,8 @@ class Env:
         self.actions = []
         self._load_actions()
         # 最低分配数量
-        self.min_allocate = 15
-
+        self.min_allocate = 60
+        self.constraint = None
         # 保存资源配置历史
         self.allocation_history = []
         self.history_length = 10
@@ -113,7 +115,6 @@ class Env:
             port = config["port"]
             slaves = [(host, port) for host in hosts]
             print(config["master"], slaves, port)
-            # raise Exception("test")
             return config["master"], slaves, port
 
     def _load_service_default_config(self):
@@ -275,6 +276,13 @@ class Env:
     def _load_predictor(self):
         """加载预测器"""
         model_path = Path(PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
+        constraint_path = Path(PROJECT_ROOT) / "predictor" / "model" / "constraint.pkl"
+
+        if os.path.exists(constraint_path):
+            with open(constraint_path, 'rb') as f:
+                self.constraint = pickle.load(f)
+        else:
+            self.constraint = None
 
         # 加载完整的检查点文件
         checkpoint = torch.load(model_path)
@@ -328,6 +336,8 @@ class Env:
         gathered["network"] = process_data(gathered["network"])
         gathered = transform_data(gathered)  # 转化为(service_num, 6, 4)
         status = gathered.reshape(gathered.shape[0], -1)  # -1 表示自动计算维度
+        if self.constraint is not None:
+            self.min_allocate = self.constraint(latency[0])
         return status, latency
 
     def convert_to_ndarray(self, allocate):
@@ -669,7 +679,7 @@ class Env:
     async def reset(self):
         """重置环境"""
         self.episode_count += 1
-        if self.episode_count % 4 == 0:
+        if self.episode_count % 10 == 0:
             self.reset_deploy()
 
         user_count_list = [50, 100, 150, 200, 250, 300, 350, 400, 450]
@@ -691,9 +701,9 @@ class Env:
             user_count = np.random.choice(user_count_list)
             await self.start_locust(user_count)
             print(f"随机选择用户数: {user_count}")
-            print("等待120秒")
-            # TODO 把预热时间改为120秒
-            time.sleep(120)
+            print("等待30秒")
+            # TODO 把预热时间改为30秒
+            time.sleep(30)
             print("预热")
             self.warmup()
             print("返回状态")
