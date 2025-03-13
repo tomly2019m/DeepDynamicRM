@@ -1,5 +1,5 @@
 Count,Message,Traceback,Nodes
-1303,'base_iat',"  File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 346, in run
+681,'base_iat',"  File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 346, in run
     self.wait()
   File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 442, in wait
     self._sleep(self.wait_time())

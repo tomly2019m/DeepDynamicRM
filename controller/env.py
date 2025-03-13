@@ -680,6 +680,8 @@ class Env:
         """重置环境"""
         self.episode_count += 1
         if self.episode_count % 10 == 0:
+            print("停止locust")
+            self.stop_locust()
             self.reset_deploy()
 
         user_count_list = [50, 100, 150, 200, 250, 300, 350, 400, 450]
