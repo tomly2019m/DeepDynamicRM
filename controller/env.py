@@ -35,7 +35,6 @@ class Env:
         self.config_path = f"{PROJECT_ROOT}/communication/comm.json"
         # 读取配置文件
         self.master, self.slaves, self.port = self._load_config(self.config_path)
-        print(self.master, self.slaves, self.port)
 
         self.username = "tomly"
         # self._setup_slaves()
