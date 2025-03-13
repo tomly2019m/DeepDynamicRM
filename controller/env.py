@@ -553,6 +553,10 @@ class Env:
             if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
                 new_allocation[service] = self.min_perrep * self.replica_dict[service]
 
+        # 如果总资源上限，则恢复到初始配置
+        if sum(new_allocation.values()) > self.max_cpu:
+            new_allocation = deepcopy(self.initial_allocation)
+
         # 更新状态记录
         self.last_allocate = deepcopy(self.allocate_dict)
         self.allocate_dict = new_allocation
