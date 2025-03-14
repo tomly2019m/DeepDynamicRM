@@ -1,4 +1,9 @@
 version: "3.8"
+
+networks:
+  default:
+    driver: overlay
+
 services:
   consul:
     image: consul:latest
@@ -7,7 +12,7 @@ services:
       - "8400:8400"
       - "8500:8500"
       - "8600:53/udp"
-
+    restart: always
   frontend:
     image: yz2297/hotel_reservation
     entrypoint: frontend
@@ -17,6 +22,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
+    restart: always
 
   profile:
     image: yz2297/hotel_reservation
@@ -29,7 +35,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-
+    restart: always
   search:
     image: yz2297/hotel_reservation
     entrypoint: search
@@ -40,7 +46,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-
+    restart: always
   geo:
     image: yz2297/hotel_reservation
     entrypoint: geo
@@ -51,7 +57,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-
+    restart: always
   rate:
     image: yz2297/hotel_reservation
     entrypoint: rate
@@ -63,7 +69,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-    
+    restart: always
   recommendation:
     image: yz2297/hotel_reservation
     entrypoint: recommendation
@@ -74,7 +80,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-
+    restart: always
   user:
     image: yz2297/hotel_reservation
     entrypoint: user
@@ -85,7 +91,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-    
+    restart: always
   reservation:
     image: yz2297/hotel_reservation
     entrypoint: reservation
@@ -97,7 +103,7 @@ services:
       - consul
     volumes:
       - ./config.json:/go/src/github.com/harlow/go-micro-services/config.json
-
+    restart: always 
   jaeger:
     image: jaegertracing/all-in-one:latest
     entrypoint: "/go/bin/all-in-one-linux --sampling.strategies-file=/etc/jaeger/sampling_strategies.json --memory.max-traces=10000"
@@ -110,7 +116,7 @@ services:
       - "5775:5775/udp"
       - "6831:6831/udp"
       - "6832:6832/udp"
-
+    restart: always
   memcached-rate:
     image: memcached
     ports:
@@ -121,7 +127,7 @@ services:
     logging:
       options:
         max-size: 50m
-
+    restart: always
   memcached-profile:
     image: memcached
     ports:
@@ -132,7 +138,7 @@ services:
     logging:
       options:
         max-size: 50m
-
+    restart: always
   memcached-reserve:
     image: memcached
     ports:
@@ -143,49 +149,49 @@ services:
     logging:
       options:
         max-size: 50m
-
+    restart: always
   mongodb-geo:
-    image: mongo
+    image: mongo:4.4.3
     ports:
       - "27018:27017" 
     volumes:
       - geo:/data/db 
-
+    restart: always
   mongodb-profile:
-    image: mongo
+    image: mongo:4.4.3
     ports:
       - "27019:27017"   
     volumes:
       - profile:/data/db 
-
+    restart: always
   mongodb-rate:
-    image: mongo
+    image: mongo:4.4.3
     ports:
       - "27020:27017"    
     volumes:
       - rate:/data/db
-
+    restart: always
   mongodb-recommendation:
-    image: mongo
+    image: mongo:4.4.3
     ports:
       - "27021:27017"    
     volumes:
       - recommendation:/data/db
-    
+    restart: always
   mongodb-reservation:
-    image: mongo
+    image: mongo:4.4.3
     ports:
       - "27022:27017"
     volumes:
       - reservation:/data/db 
-
-  mongodb-user:
-    image: mongo
+    restart: always
+  mongodb-user: 
+    image: mongo:4.4.3
     ports:
       - "27023:27017"   
     volumes:
       - user:/data/db
-
+    restart: always
 volumes:
   geo:
   profile:

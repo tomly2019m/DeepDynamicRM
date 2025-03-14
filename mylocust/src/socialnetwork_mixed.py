@@ -363,10 +363,15 @@ class SocialMediaUser(HttpUser):
         return truncnorm(a, b, loc=cfg["mu"], scale=cfg["sigma"]).rvs()
 
     def _impulse_noise(self):
-        cfg = LoadConfig.CONFIGURATIONS["noise"]
-        cfg = cfg["impulse"]
-        if random.random() < cfg["prob"]:
-            return np.random.exponential(cfg["multiplier"] * cfg["base_iat"])
+        # 获取全局noise配置
+        noise_cfg = LoadConfig.CONFIGURATIONS["noise"]
+        # 从父级配置获取base_iat
+        base_iat = noise_cfg["base_iat"]
+        # 获取impulse子配置
+        impulse_cfg = noise_cfg["impulse"]
+
+        if random.random() < impulse_cfg["prob"]:
+            return np.random.exponential(impulse_cfg["multiplier"] * base_iat)
         return 0
 
     def _random_walk(self):
