@@ -1,19 +1,1 @@
 Count,Message,Traceback,Nodes
-2495,'base_iat',"  File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 346, in run
-    self.wait()
-  File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 442, in wait
-    self._sleep(self.wait_time())
-                ^^^^^^^^^^^^^^^^
-  File ""/home/tomly/miniconda3/envs/DDRM/lib/python3.11/site-packages/locust/user/task.py"", line 421, in wait_time
-    return self.user.wait_time()
-           ^^^^^^^^^^^^^^^^^^^^^
-  File ""/home/tomly/DeepDynamicRM/mylocust/src/socialnetwork_mixed.py"", line 284, in wait_time
-    return self._noise_wait()
-           ^^^^^^^^^^^^^^^^^^
-  File ""/home/tomly/DeepDynamicRM/mylocust/src/socialnetwork_mixed.py"", line 354, in _noise_wait
-    noise = self._gaussian_noise() + self._impulse_noise() + self._random_walk()
-                                     ^^^^^^^^^^^^^^^^^^^^^
-  File ""/home/tomly/DeepDynamicRM/mylocust/src/socialnetwork_mixed.py"", line 369, in _impulse_noise
-    return np.random.exponential(cfg[""multiplier""] * cfg[""base_iat""])
-                                                     ~~~^^^^^^^^^^^^
-",local

@@ -56,7 +56,7 @@ class SACD_agent:
             # 获取预测结果
             probs = self.actor(service, latency)
 
-            p = self.exp_noise
+            p = 0.02 if deterministic else self.exp_noise
             if np.random.rand() < p:
                 return np.random.randint(0, self.action_dim)
 
@@ -139,8 +139,8 @@ class SACD_agent:
         torch.save(self.actor.state_dict(), f"{save_path}/sacd_actor_{time}_{steps}.pth")
         torch.save(self.q_critic.state_dict(), f"{save_path}/sacd_critic_{time}_{steps}.pth")
 
-    def load(self, time, steps):
-        save_path = f"./model/{time}/"
+    def load(self, time, steps, dir):
+        save_path = f"{dir}/"
         self.actor.load_state_dict(torch.load(f"{save_path}/sacd_actor_{time}_{steps}.pth", map_location=self.dvc))
         self.q_critic.load_state_dict(torch.load(f"{save_path}/sacd_critic_{time}_{steps}.pth", map_location=self.dvc))
 

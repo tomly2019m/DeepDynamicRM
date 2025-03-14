@@ -19,7 +19,7 @@ import torch.nn.functional as F
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
-from communication.master import SlaveConnection
+from communication.connections import SlaveConnection
 from predictor.slo_predictor import OnlineScaler
 from monitor.data_collector import *
 from monitor.shell import execute_command
@@ -664,6 +664,42 @@ class Env:
             print(f"启动Locust失败: {str(e)}")
             raise
 
+    async def start_locust_eval(self, user_count, locust_file_name):
+        locust_cmd = [
+            "locust",  # 命令名称
+            "-f",  # 参数：指定locust文件路径
+            f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py",
+            "--host",  # 参数：目标主机
+            "http://127.0.0.1:8080",
+            "--users",  # 用户数参数
+            f"{user_count}",
+            "--csv",  # 输出CSV文件
+            f"{PROJECT_ROOT}/mylocust/locust_log",
+            "--headless",  # 无头模式
+            "-t",  # 测试时长
+            f"{10 * 2000}s",
+            "-r",
+            "10"  # 每秒启动10个用户
+        ]
+
+        print(f"locust command:{locust_cmd}")
+
+        try:
+            # 创建子进程，不等待立即返回
+            process = await asyncio.create_subprocess_exec(
+                *locust_cmd,
+                stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
+                stderr=asyncio.subprocess.DEVNULL)
+
+            print(f"Locust已启动，PID: {process.pid}")
+
+            self.locust_pid = process.pid
+
+        except Exception as e:
+            # 捕获启动错误（如命令不存在、路径错误等）
+            print(f"启动Locust失败: {str(e)}")
+            raise
+
     def stop_locust(self):
         if self.locust_pid:
             _, _ = execute_command(f"sudo kill {self.locust_pid}")
@@ -715,3 +751,30 @@ class Env:
             return self.get_state_and_latency()
         except Exception as e:
             print(f"重置环境失败: {str(e)}")
+
+    async def reset_eval(self, user_count, locustfile_name):
+        """重置环境"""
+        print("停止locust")
+        self.locust_pid = None
+        print("清空缓存")
+        self.buffer.clear()
+        self.latency_buffer.clear()
+        self.config_buffer.clear()
+        self.allocation_history.clear()
+        # 每个回合 重置cpu分配方案 防止上一个回合的cpu分配方案影响下一个回合
+        self._load_service_default_config()
+        print("重新启动locust")
+        await self.start_locust_eval(user_count, locustfile_name)
+        print("等待30秒")
+        # TODO 把预热时间改为30秒
+        time.sleep(30)
+        print("预热")
+        self.warmup()
+        print("返回状态")
+        return self.get_state_and_latency()
+
+
+    def reset_benchmark(self):
+        """重置实验环境"""
+        self.stop_locust()
+        self.reset_deploy()

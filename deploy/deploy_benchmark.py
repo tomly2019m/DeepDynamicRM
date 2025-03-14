@@ -15,8 +15,14 @@ parser.add_argument("--docker_compose",
                     type=str,
                     default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/docker-compose-swarm.yml",
                     help="benchmark yaml file path")
-parser.add_argument("--bench_dir", type=str, default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/", help="benchmark data dir")
-parser.add_argument("--benchmark_config", type=str, default="./config/socialnetwork.json", help="benchmark config file path")
+parser.add_argument("--bench_dir",
+                    type=str,
+                    default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/",
+                    help="benchmark data dir")
+parser.add_argument("--benchmark_config",
+                    type=str,
+                    default="./config/socialnetwork.json",
+                    help="benchmark config file path")
 parser.add_argument("--username", type=str, default="tomly", help="username for ssh")
 parser.add_argument("--benchmark_name", type=str, default="socialnetwork", help="benchmark name")
 args = parser.parse_args()
@@ -79,7 +85,8 @@ def dissolve_cluster():
 # 配置节点标签
 def config_node_label(node_name: str, label: str):
     config_node_label_command = f"docker node update --label-add {label} {node_name}"
-    result, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, config_node_label_command)
+    result, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username,
+                                                 config_node_label_command)
     if err:
         raise RuntimeError(f"执行配置节点标签命令出错: {err}")
     print(result)
@@ -130,7 +137,10 @@ def setup_swarm_cluster():
 
 def docker_stack_rm(stack_name: str):
     docker_stack_rm_command = f"docker stack rm {stack_name}"
-    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, docker_stack_rm_command, stream_output=True)
+    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"],
+                                            username,
+                                            docker_stack_rm_command,
+                                            stream_output=True)
     if err:
         raise RuntimeError(f"执行删除栈命令出错: {err}")
     print(f"栈 {stack_name} 删除成功")
@@ -139,7 +149,10 @@ def docker_stack_rm(stack_name: str):
 def deploy_benchmark():
     resource_config = load_config(benchmark_config)
     docker_stack_deploy_command = f"docker stack deploy -c {docker_compose_file} {resource_config['name']}"
-    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, docker_stack_deploy_command, stream_output=True)
+    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"],
+                                            username,
+                                            docker_stack_deploy_command,
+                                            stream_output=True)
     if err:
         raise RuntimeError(f"执行部署命令出错: {err}")
     print("等待所有副本拉起")
@@ -148,7 +161,8 @@ def deploy_benchmark():
     while not converged:
         for service in client.services.list():
             command = "docker service ls --format '{{.Replicas}}' --filter 'id=" + service.id + "'"
-            out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True, universal_newlines=True).strip()
+            out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True,
+                                          universal_newlines=True).strip()
             if err:
                 raise RuntimeError(f"执行检查服务副本命令出错: {err}")
             print("service: ", service.name, "replicas: ", out)
