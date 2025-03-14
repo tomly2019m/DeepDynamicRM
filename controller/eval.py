@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
     parser.add_argument('--locustfile_name',
                         type=str,
-                        default="socialnetwork_constant",
+                        default="socialnetwork_noisy",
                         help='locustfile名称 (默认: socialnetwork)')
     parser.add_argument('--user_count', type=int, default=250, help='用户数量 (默认: 50)')
 
@@ -264,30 +264,28 @@ def setup_slave():
     hosts = ["rm1", "rm2", "rm3", "rm4"]
     port = 12345
     username = "tomly"
+    # 建议使用绝对路径，避免 "~" 无法正确展开
+    python_path = "/home/tomly/miniconda3/envs/DDRM/bin/python3"
+    # 将两个命令组合在一起，第一个命令执行完后立即执行第二个命令
+    # 此处假设第一个命令用于清理旧进程，第二个命令启动新的后台服务
+    command = (
+        f"sudo kill -9 $(sudo lsof -t -i :{port}) || true; "  # 清理旧进程
+        "cd /home/tomly/DeepDynamicRM/communication && "  # 切换到工作目录
+        f"nohup {python_path} slave.py --port {port} > /dev/null 2>&1 &"  # 后台启动服务
+    )
 
-    # 在每个slave节点上启动监听服务
     for host in hosts:
-        # 创建SSH客户端
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
         try:
-            # 连接到远程服务器
-            client.connect(hostname=host, username=username)
-
-            # 清理旧的进程
-            command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
+            client.connect(hostname=host, username=username, timeout=10)
+            # 一次性发送组合命令，不读取任何输出
             client.exec_command(command)
-
-            # 启动监听服务
-            command = ("cd ~/DeepDynamicRM/communication && "
-                       "nohup ~/miniconda3/envs/DDRM/bin/python3 "
-                       f"slave.py --port {port} > /dev/null 2>&1 &")
-            client.exec_command(command)
-
-            print(f"在 {host} 上启动监听服务,端口:{port}")
+            print(f"{host} 服务已启动")
         except Exception as e:
-            print(f"连接到 {host} 时出错: {str(e)}")
+            print(f"{host} 错误: {str(e)}")
+        finally:
+            client.close()
 
 
 def test_setup_slave():

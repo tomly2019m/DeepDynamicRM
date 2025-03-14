@@ -1,1 +1,4 @@
 Method,Name,Error,Occurrences
+GET,read_home_line,"ConnectionRefusedError(111, 'Connection refused')",264
+POST,compose_post,"ConnectionRefusedError(111, 'Connection refused')",23
+GET,read_user_timeline,"ConnectionRefusedError(111, 'Connection refused')",50
