@@ -80,11 +80,10 @@ async def main(args):
 
     # 初始化环境，创建slave连接
     env = Env()
-    await env.create_connections()
-    connections = env.connections
-
     # 重置实验环境
     env.reset_benchmark()
+    await env.create_connections()
+    connections = env.connections
 
     # 初始化智能体
     agent = SACD_agent(**vars(args))
@@ -248,6 +247,7 @@ async def main(args):
             json.dump(summary, f, indent=4)
 
         print(f"评估结果已保存至 {eval_data_path}")
+        env.stop_locust()
 
     except Exception as e:
         raise e
@@ -256,6 +256,7 @@ async def main(args):
         for connection in connections.values():
             connection.send_command_sync("close")
             connection.close()
+        kill_slave()
 
 
 def setup_slave():
@@ -311,6 +312,26 @@ def test_setup_slave():
         print(f"发送失败: {e}")
     finally:
         s.close()
+
+
+def kill_slave():
+    import paramiko
+
+    hosts = ["rm1", "rm2", "rm3", "rm4"]
+    port = 12345
+    username = "tomly"
+    command = f"sudo kill -9 $(sudo lsof -t -i :{port}) || true"
+    for host in hosts:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(hostname=host, username=username, timeout=10)
+            client.exec_command(command)
+            print(f"{host} 服务已关闭")
+        except Exception as e:
+            print(f"{host} 错误: {str(e)}")
+        finally:
+            client.close()
 
 
 if __name__ == "__main__":

@@ -755,6 +755,7 @@ class Env:
     async def reset_eval(self, user_count, locustfile_name):
         """重置环境"""
         print("停止locust")
+        self.stop_locust()
         self.locust_pid = None
         print("清空缓存")
         self.buffer.clear()
@@ -772,7 +773,6 @@ class Env:
         self.warmup()
         print("返回状态")
         return self.get_state_and_latency()
-
 
     def reset_benchmark(self):
         """重置实验环境"""
