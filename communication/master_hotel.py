@@ -18,7 +18,7 @@ from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
 from communication.sync import distribute_project
-from communication.MAB import UCB_Bandit
+from communication.MAB_hotel import UCB_Bandit
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time", type=int, default=15, help="experiment time")
@@ -288,10 +288,6 @@ def save_data(gathered_list, replicas):
     print(f"已保存cpu_config_path数据到: {cpu_config_path}")
 
 
-class Executor:
-    pass
-
-
 async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
@@ -310,11 +306,6 @@ async def main():
 
     connections: Dict[Tuple[str, int], SlaveConnection] = {}
 
-    # command = ("cd ~/DeepDynamicRM/deploy && "
-    #            "~/miniconda3/envs/DDRM/bin/python3 "
-    #            "deploy_benchmark.py")
-    # execute_command(command, stream_output=True)
-
     # 建立与每个slave的连接
     for slave_host, slave_port in slaves:
         connection = SlaveConnection(slave_host, slave_port)
@@ -322,7 +313,7 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
+    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400]:
         # setup_slave()
         # 等待slave监听进程启动完成
         if users >= 300:
@@ -330,7 +321,7 @@ async def main():
             #重置实验环境
             command = ("cd ~/DeepDynamicRM/deploy && "
                        "~/miniconda3/envs/DDRM/bin/python3 "
-                       "deploy_benchmark.py")
+                       "deploy_hotel.py")
             execute_command(command, stream_output=True)
         if users >= 300:
             exp_time = 1500

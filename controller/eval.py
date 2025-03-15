@@ -248,6 +248,7 @@ async def main(args):
 
         print(f"评估结果已保存至 {eval_data_path}")
         env.stop_locust()
+        kill_slave()
 
     except Exception as e:
         raise e
@@ -337,6 +338,8 @@ def kill_slave():
 if __name__ == "__main__":
     # 启动slave节点
     args = parse_args()
+    kill_slave()
+    time.sleep(10)
     setup_slave()
     time.sleep(5)
     print("评估参数配置：")

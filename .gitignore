@@ -2,8 +2,8 @@ communication/data/
 *.csv
 predictor/model/
 **/exp_data/
+**/eval_data/
 **/logs/
 **/checkpoints/
-controller/model/
 **/model/
 *.pkl
