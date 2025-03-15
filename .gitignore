@@ -7,3 +7,4 @@ predictor/model/
 **/checkpoints/
 **/model/
 *.pkl
+**/__pycache__/

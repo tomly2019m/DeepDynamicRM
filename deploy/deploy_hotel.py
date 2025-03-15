@@ -17,18 +17,18 @@ sys.path.append(PROJECT_ROOT)
 parser = argparse.ArgumentParser()
 parser.add_argument("--docker_compose",
                     type=str,
-                    default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/docker-compose-swarm.yml",
+                    default="~/DeepDynamicRM/benchmarks/hotelReservation/docker-compose.yml",
                     help="benchmark yaml file path")
 parser.add_argument("--bench_dir",
                     type=str,
-                    default="~/DeepDynamicRM/benchmarks/socialNetwork-ml-swarm/",
+                    default="~/DeepDynamicRM/benchmarks/hotelReservation/",
                     help="benchmark data dir")
 parser.add_argument("--benchmark_config",
                     type=str,
-                    default="./config/socialnetwork.json",
+                    default="./config/hotelreservation.json",
                     help="benchmark config file path")
 parser.add_argument("--username", type=str, default="tomly", help="username for ssh")
-parser.add_argument("--benchmark_name", type=str, default="socialnetwork", help="benchmark name")
+parser.add_argument("--benchmark_name", type=str, default="hotel", help="benchmark name")
 args = parser.parse_args()
 
 username = args.username
@@ -152,7 +152,8 @@ def docker_stack_rm(stack_name: str):
 
 def deploy_benchmark():
     resource_config = load_config(benchmark_config)
-    docker_stack_deploy_command = f"cd {PROJECT_ROOT}/benchmarks/hotelReservation && docker stack deploy -c {docker_compose_file}"
+    docker_stack_deploy_command = f"cd {PROJECT_ROOT}/benchmarks/hotelReservation && docker stack deploy -c {docker_compose_file} {benchmark_name}"
+    print(docker_stack_deploy_command)
     _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"],
                                             username,
                                             docker_stack_deploy_command,
@@ -187,8 +188,8 @@ def deploy_benchmark():
 
 
 if __name__ == "__main__":
-    docker_stack_rm(benchmark_name)
-    dissolve_cluster()
-    init_master()
-    setup_swarm_cluster()
+    # docker_stack_rm(benchmark_name)
+    # dissolve_cluster()
+    # init_master()
+    # setup_swarm_cluster()
     deploy_benchmark()
