@@ -21,7 +21,7 @@ from communication.sync import distribute_project
 from communication.MAB_hotel import UCB_Bandit
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time", type=int, default=15, help="experiment time")
+parser.add_argument("--exp_time", type=int, default=300, help="experiment time")
 parser.add_argument("--username", type=str, default="tomly", help="username for SSH connection")
 parser.add_argument("--save", action="store_true", help="whether to save data")
 
@@ -88,6 +88,8 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
 
     tasks = []
 
+    pids = []
+
     # 启动master节点
     master_cmd = [
         "locust",
@@ -128,7 +130,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                                                               stdout=asyncio.subprocess.DEVNULL,
                                                               stderr=asyncio.subprocess.DEVNULL)
         print(f"Locust master started with PID: {master_process.pid}")
-
+        pids.append(master_process.pid)
         # 启动8个worker进程
         worker_processes = []
         for i in range(8):
@@ -140,7 +142,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
 
         # 将进程对象保存在全局变量中以便后续管理
         locust_process = [master_process] + worker_processes
-
+        pids.extend([master_process.pid] + [worker_process.pid for worker_process in worker_processes])
     except Exception as e:
         print(f"启动Locust失败: {str(e)}")
         # 清理已启动的进程
@@ -256,12 +258,14 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             time.sleep(1)
             current_exp_time += 1
             if current_exp_time == exp_time:
-                _, _ = execute_command(f"sudo kill {process.pid}")
+                for pid in pids:
+                    _, _ = execute_command(f"sudo kill {pid}")
                 break
 
     finally:
         # 清理locust进程
-        _, _ = execute_command(f"sudo kill {process.pid}")
+        for pid in pids:
+            _, _ = execute_command(f"sudo kill {pid}")
 
 
 # 配置好slave，在slave上启动监听
@@ -287,6 +291,26 @@ def setup_slave():
             # 一次性发送组合命令，不读取任何输出
             client.exec_command(command)
             print(f"{host} 服务已启动")
+        except Exception as e:
+            print(f"{host} 错误: {str(e)}")
+        finally:
+            client.close()
+
+
+def kill_slave():
+    import paramiko
+
+    hosts = ["rm1", "rm2", "rm3", "rm4"]
+    port = 12345
+    username = "tomly"
+    command = f"sudo kill -9 $(sudo lsof -t -i :{port}) || true"
+    for host in hosts:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(hostname=host, username=username, timeout=10)
+            client.exec_command(command)
+            print(f"{host} 服务已关闭")
         except Exception as e:
             print(f"{host} 错误: {str(e)}")
         finally:
@@ -323,6 +347,10 @@ async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
+    kill_slave()
+    time.sleep(10)
+    setup_slave()
+    time.sleep(5)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
@@ -342,22 +370,17 @@ async def main():
         connection = SlaveConnection(slave_host, slave_port)
         await connection.connect()
         connections[(slave_host, slave_port)] = connection
-        connection.send_command_sync("init")
 
     for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400]:
-        # setup_slave()
-        # 等待slave监听进程启动完成
-        if users >= 300:
-            time.sleep(10)
-            #重置实验环境
-            command = ("cd ~/DeepDynamicRM/deploy && "
-                       "~/miniconda3/envs/DDRM/bin/python3 "
-                       "deploy_hotel.py")
-            execute_command(command, stream_output=True)
-        if users >= 300:
-            exp_time = 1500
-        else:
-            exp_time = 500
+        #重置实验环境
+        command = ("cd ~/DeepDynamicRM/deploy && "
+                   "~/miniconda3/envs/DDRM/bin/python3 "
+                   "deploy_hotel.py")
+        execute_command(command, stream_output=True)
+        for connection in connections.values():
+            connection.send_command_sync("init")
+        # 等待初始化完成
+        time.sleep(10)
 
         for load_type in ["constant", "daynight", "bursty", "noisy"]:
             await start_experiment(connections, users, load_type, mab_config[str(users)])
