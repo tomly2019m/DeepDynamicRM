@@ -347,16 +347,16 @@ async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
-    kill_slave()
-    time.sleep(10)
-    setup_slave()
-    time.sleep(5)
+    # kill_slave()
+    # time.sleep(10)
+    # setup_slave()
+    # time.sleep(5)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
 
     mab_config = ""
-    with open("./mab.json", "r") as f:
+    with open("./mab_hotel.json", "r") as f:
         mab_config = json.load(f)
 
     hosts = comm_config["slaves"]
@@ -376,7 +376,7 @@ async def main():
         command = ("cd ~/DeepDynamicRM/deploy && "
                    "~/miniconda3/envs/DDRM/bin/python3 "
                    "deploy_hotel.py")
-        execute_command(command, stream_output=True)
+        # execute_command(command, stream_output=True)
         for connection in connections.values():
             connection.send_command_sync("init")
         # 等待初始化完成
