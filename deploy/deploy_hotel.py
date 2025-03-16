@@ -188,8 +188,8 @@ def deploy_benchmark():
 
 
 if __name__ == "__main__":
-    # docker_stack_rm(benchmark_name)
-    # dissolve_cluster()
-    # init_master()
-    # setup_swarm_cluster()
+    docker_stack_rm(benchmark_name)
+    dissolve_cluster()
+    init_master()
+    setup_swarm_cluster()
     deploy_benchmark()

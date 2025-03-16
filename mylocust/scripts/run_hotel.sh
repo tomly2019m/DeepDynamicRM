@@ -1,0 +1,1 @@
+locust -f src/hotelreservation_constant.py --host http://127.0.0.1:5000 --users 2000  --csv=locust_log --headless -t 400s -r 10
