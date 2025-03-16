@@ -380,6 +380,8 @@ def get_memory_usage():
             container_id = container_name_id[container_name]
             assert cgroup_version == "v2"
             pseudo_file = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope/memory.stat"
+            if not os.path.exists(pseudo_file):
+                raise FileNotFoundError(f"文件不存在: {pseudo_file}")
             with open(pseudo_file, "r") as f:
                 total_memory = 0
                 for line in f:
@@ -409,8 +411,7 @@ def get_io_usage():
             assert cgroup_version == "v2"
             pseudo_file = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope/io.stat"
             if not os.path.exists(pseudo_file):
-                print(f"容器{container_name}的io.stat文件不存在")
-                continue
+                raise FileNotFoundError(f"文件不存在: {pseudo_file}")
             with open(pseudo_file, "r") as f:
                 lines = f.readlines()
                 total_rbytes, total_wbytes, total_rios, total_wios = 0, 0, 0, 0
@@ -450,8 +451,7 @@ def get_network_usage():
             container_pid = container_id_pid[container_id]
             pseudo_file = f"/proc/{container_pid}/net/dev"
             if not os.path.exists(pseudo_file):
-                print(f"容器{container_name}的net/dev文件不存在")
-                continue
+                raise FileNotFoundError(f"文件不存在: {pseudo_file}")
 
             with open(pseudo_file, "r") as f:
                 lines = f.readlines()

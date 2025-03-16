@@ -14,14 +14,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 sys.path.append(f"{PROJECT_ROOT}/deploy")
 
-from monitor.data_collector import *
+from monitor.data_collector_hotel import *
 from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
 from communication.sync import distribute_project
 from communication.MAB_hotel import UCB_Bandit
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time", type=int, default=300, help="experiment time")
+parser.add_argument("--exp_time", type=int, default=150, help="experiment time")
 parser.add_argument("--username", type=str, default="tomly", help="username for SSH connection")
 parser.add_argument("--save", action="store_true", help="whether to save data")
 
@@ -166,7 +166,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
     time.sleep(30)
 
     current_exp_time = 0
-    start_time = time.time()
+
     try:
         while True:
             # 数据采集阶段
@@ -175,6 +175,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             tasks.clear()
             while True:
                 modify = False
+                start_time = time.time()
                 for connection in connections.values():
                     result = connection.send_command_sync("collect")
                     if result == "modify":
@@ -190,6 +191,14 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                     gathered["memory"] = concat_data(gathered["memory"], data_dict["memory"])
                     gathered["io"] = concat_data(gathered["io"], data_dict["io"])
                     gathered["network"] = concat_data(gathered["network"], data_dict["network"])
+                # 检查gathered中是否存在空数据或空列表
+                for k, data in gathered.items():
+                    for key, v in data.items():
+                        if not v:
+                            print(f"gathered中存在空数据或空列表，重新采集")
+                            print(f"gathered: {gathered}")
+                            modify = True
+                            break
                 if not modify:
                     break
 
@@ -199,7 +208,6 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             if len(replicas) == 0:
                 replicas = np.array([len(cpu_list) for cpu_list in gathered["cpu"].values()]).flatten()
                 service_replicas = {key: len(cpu_list) for key, cpu_list in gathered["cpu"].items()}
-
             print(f"当前实验进度: {current_exp_time}/{exp_time}")
 
             # 数据处理阶段
@@ -255,7 +263,10 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             print(f"总时间: {total_time:.3f}秒")
             print("-" * 50)
 
-            time.sleep(1)
+            elapsed_time = time.time() - start_time
+            if elapsed_time < 1:
+                time.sleep(1 - elapsed_time)
+
             current_exp_time += 1
             if current_exp_time == exp_time:
                 for pid in pids:
@@ -273,7 +284,6 @@ def setup_slave():
     hosts = ["rm1", "rm2", "rm3", "rm4"]
     port = 12345
     username = "tomly"
-    # 建议使用绝对路径，避免 "~" 无法正确展开
     python_path = "/home/tomly/miniconda3/envs/DDRM/bin/python3"
     # 将两个命令组合在一起，第一个命令执行完后立即执行第二个命令
     # 此处假设第一个命令用于清理旧进程，第二个命令启动新的后台服务
@@ -347,10 +357,10 @@ async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
-    # kill_slave()
-    # time.sleep(10)
-    # setup_slave()
-    # time.sleep(5)
+    kill_slave()
+    time.sleep(10)
+    setup_slave()
+    time.sleep(5)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
@@ -370,19 +380,18 @@ async def main():
         connection = SlaveConnection(slave_host, slave_port)
         await connection.connect()
         connections[(slave_host, slave_port)] = connection
+        connection.send_command_sync("init")
 
     for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400]:
         #重置实验环境
         command = ("cd ~/DeepDynamicRM/deploy && "
                    "~/miniconda3/envs/DDRM/bin/python3 "
                    "deploy_hotel.py")
-        # execute_command(command, stream_output=True)
-        for connection in connections.values():
-            connection.send_command_sync("init")
-        # 等待初始化完成
+        execute_command(command, stream_output=True)  
         time.sleep(10)
 
-        for load_type in ["constant", "daynight", "bursty", "noisy"]:
+        # for load_type in ["constant", "daynight", "bursty", "noisy"]:
+        for load_type in ["constant"]:
             await start_experiment(connections, users, load_type, mab_config[str(users)])
             if save:
                 save_data(gathered_list, replicas)

@@ -356,8 +356,6 @@ class UCB_Bandit:
             if len(self.allocation_history) == self.history_length:
                 new_allocation = deepcopy(self.allocation_history[0])
 
-        key_service = self.config["key_service"]
-
         # 验证分配有效性
         for service in new_allocation:
             if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
