@@ -181,7 +181,7 @@ def deploy_benchmark():
 
         time.sleep(5)
         waits += 1
-        if waits > 30:
+        if waits > 60:
             docker_stack_rm(resource_config["name"])
             raise RuntimeError("服务副本未完全拉起，等待超时")
     print("部署完成")

@@ -37,6 +37,7 @@ service_replicas = {}
 latency_list = []
 cpu_config_list = []
 services = []
+locust_process = []
 
 with open(f"{PROJECT_ROOT}/deploy/config/hotelreservation.json", 'r') as f:
     config = json.load(f)
@@ -83,40 +84,70 @@ class SlaveConnection:
 
 
 async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], users: int, load_type: str, min_core):
-    global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
+    global exp_time, gathered_list, replicas, service_replicas, cpu_config_list, locust_process
 
     tasks = []
 
-    # 启动locust负载，同时使用MAB探索
-    locust_cmd = [
-        "locust",  # 命令名称
-        "-f",  # 参数：指定locust文件路径
-        f"{PROJECT_ROOT}/mylocust/src/hotelreservation_{load_type}.py",  # 你的Locust文件路径
-        "--host",  # 参数：目标主机
+    # 启动master节点
+    master_cmd = [
+        "locust",
+        "-f",
+        f"{PROJECT_ROOT}/mylocust/src/hotelreservation_{load_type}.py",
+        "--host",
         "http://127.0.0.1:5000",
-        "--users",  # 用户数参数
+        "--master",
+        "--headless",
+        "--users",
         f"{users}",
-        "--csv",  # 输出CSV文件
-        f"{PROJECT_ROOT}/mylocust/locust_log",
-        "--headless",  # 无头模式
-        "-t",  # 测试时长
+        "-r",
+        "50",  # 启动速率参数
+        "-t",
         f"{3 * exp_time}s",
+        "--csv",
+        f"{PROJECT_ROOT}/mylocust/locust_log",
+        "--expect-workers=8",
+        "--master-bind-host=0.0.0.0"
     ]
 
-    print(f"locust command:{locust_cmd}")
+    print(f"Master command: {' '.join(master_cmd)}")
+
+    # 启动worker节点的基本命令
+    worker_cmd_base = [
+        "locust",
+        "-f",
+        f"{PROJECT_ROOT}/mylocust/src/hotelreservation_{load_type}.py",
+        "--host",
+        "http://127.0.0.1:5000",
+        "--worker",
+        "--master-host=127.0.0.1"  # 假设master在本地运行
+    ]
 
     try:
-        # 创建子进程，不等待立即返回
-        process = await asyncio.create_subprocess_exec(
-            *locust_cmd,
-            stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
-            stderr=asyncio.subprocess.DEVNULL)
+        # 启动master进程
+        master_process = await asyncio.create_subprocess_exec(*master_cmd,
+                                                              stdout=asyncio.subprocess.DEVNULL,
+                                                              stderr=asyncio.subprocess.DEVNULL)
+        print(f"Locust master started with PID: {master_process.pid}")
 
-        print(f"Locust已启动，PID: {process.pid}")
+        # 启动8个worker进程
+        worker_processes = []
+        for i in range(8):
+            worker_process = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                                  stdout=asyncio.subprocess.DEVNULL,
+                                                                  stderr=asyncio.subprocess.DEVNULL)
+            worker_processes.append(worker_process)
+            print(f"Worker {i} started with PID: {worker_process.pid}")
+
+        # 将进程对象保存在全局变量中以便后续管理
+        locust_process = [master_process] + worker_processes
 
     except Exception as e:
-        # 捕获启动错误（如命令不存在、路径错误等）
         print(f"启动Locust失败: {str(e)}")
+        # 清理已启动的进程
+        if 'master_process' in locals():
+            master_process.terminate()
+        for wp in worker_processes:
+            wp.terminate()
         raise
 
     mab = UCB_Bandit(min_core)

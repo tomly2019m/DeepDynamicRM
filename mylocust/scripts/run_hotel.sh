@@ -3,8 +3,8 @@ locust -f src/hotelreservation_constant.py \
   --master \
   --headless \
   --users 3700 \
-  -r 20 \
+  -r 50 \
   -t 400s \
   --csv=locust_log \
   --expect-workers=8 \
-  --master-bind-host=0.0.0.0  # 允许其他机器连接
+  --master-bind-host=0.0.0.0
