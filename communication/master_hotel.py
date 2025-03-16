@@ -21,7 +21,7 @@ from communication.sync import distribute_project
 from communication.MAB_hotel import UCB_Bandit
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time", type=int, default=150, help="experiment time")
+parser.add_argument("--exp_time", type=int, default=300, help="experiment time")
 parser.add_argument("--username", type=str, default="tomly", help="username for SSH connection")
 parser.add_argument("--save", action="store_true", help="whether to save data")
 
@@ -182,7 +182,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                         for connection in connections.values():
                             # 确保容器状态稳定再flush
                             print("等待容器状态稳定")
-                            time.sleep(5)
+                            time.sleep(10)
                             connection.send_command_sync("flush")
                         modify = True
                         break
@@ -290,7 +290,7 @@ def setup_slave():
     command = (
         f"sudo kill -9 $(sudo lsof -t -i :{port}) || true; "  # 清理旧进程
         "cd /home/tomly/DeepDynamicRM/communication && "  # 切换到工作目录
-        f"nohup {python_path} slave.py --port {port} > /dev/null 2>&1 &"  # 后台启动服务
+        f"nohup {python_path} slave_hotel.py --port {port} > /dev/null 2>&1 &"  # 后台启动服务
     )
 
     for host in hosts:
@@ -360,7 +360,7 @@ async def main():
     kill_slave()
     time.sleep(10)
     setup_slave()
-    time.sleep(5)
+    time.sleep(10)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
@@ -382,16 +382,18 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400]:
+    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700]:
+    # for users in [3700]:
         #重置实验环境
-        command = ("cd ~/DeepDynamicRM/deploy && "
-                   "~/miniconda3/envs/DDRM/bin/python3 "
-                   "deploy_hotel.py")
-        execute_command(command, stream_output=True)  
+        if users == 1000 or users == 2500:
+            command = ("cd ~/DeepDynamicRM/deploy && "
+                       "~/miniconda3/envs/DDRM/bin/python3 "
+                       "deploy_hotel.py")
+            execute_command(command, stream_output=True)
         time.sleep(10)
 
-        # for load_type in ["constant", "daynight", "bursty", "noisy"]:
-        for load_type in ["constant"]:
+        for load_type in ["constant", "daynight", "bursty", "noisy"]:
+            # for load_type in ["constant"]:
             await start_experiment(connections, users, load_type, mab_config[str(users)])
             if save:
                 save_data(gathered_list, replicas)
