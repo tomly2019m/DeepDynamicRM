@@ -12,6 +12,7 @@ import joblib
 import numpy as np
 from collections import deque
 import paramiko
+import psutil
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn.functional as F
@@ -20,11 +21,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
 from communication.connections import SlaveConnection
-from predictor.slo_predictor import OnlineScaler
-from monitor.data_collector import *
+from predictor.slo_predictor_hotel import OnlineScaler
+from monitor.data_collector_hotel import *
 from monitor.shell import execute_command
-from predictor.slo_predictor import DynamicSLOPredictor
-from monitor.data_collector import concat_data, process_data, transform_data
+from predictor.slo_predictor_hotel import DynamicSLOPredictor
+from monitor.data_collector_hotel import concat_data, process_data, transform_data
 from mylocust.util.get_latency_data import get_latest_latency
 
 
@@ -67,6 +68,8 @@ class Env:
         # 最低分配数量
         self.min_allocate = 60
         self.constraint = None
+        self.scale_factor = 0.5
+        self.recover_episode = 30
         # 保存资源配置历史
         self.allocation_history = []
         self.history_length = 10
@@ -87,7 +90,8 @@ class Env:
         self.cpu_state = {}
 
         # locust进程的pid
-        self.locust_pid = None
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
 
         # 预测器
         self.predictor = DynamicSLOPredictor(service_mode="hier_attention")
@@ -102,7 +106,7 @@ class Env:
 
         self.steps = 0  # 统计step
 
-        self.done_steps = 20 * 3600
+        self.done_steps = 110000
 
         self.every_episode_steps = 1000
 
@@ -120,7 +124,7 @@ class Env:
         """
         从配置文件中加载并生成 allocate_dict 和 replica_dict，初始化初始分配字典，初始化默认cpu配置
         """
-        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "socialnetwork.json")
+        config_file_path = os.path.join(PROJECT_ROOT, "deploy", "config", "hotelreservation.json")
 
         try:
             with open(config_file_path, "r") as f:
@@ -183,7 +187,7 @@ class Env:
 
                 command = ("cd ~/DeepDynamicRM/communication && "
                            "nohup ~/miniconda3/envs/DDRM/bin/python3 "
-                           f"slave.py --port {self.port} > /dev/null 2>&1 &")
+                           f"slave_hotel.py --port {self.port} > /dev/null 2>&1 &")
 
                 stdin, stdout, stderr = ssh.exec_command(command)
 
@@ -196,7 +200,7 @@ class Env:
 
     def _load_scalers(self):
         """加载预测器训练好的标准化器"""
-        save_dir = f"{PROJECT_ROOT}/predictor/model"
+        save_dir = f"{PROJECT_ROOT}/predictor/model/hotel"
 
         try:
             # 加载服务级标准化器
@@ -250,7 +254,7 @@ class Env:
             raise
 
     def _load_reward_config(self):
-        config_path = Path(PROJECT_ROOT) / "controller" / "reward.json"
+        config_path = Path(PROJECT_ROOT) / "controller" / "reward_hotel.json"
         with open(config_path, 'r') as f:
             config = json.load(f)
             self.w1, self.w2, self.w3, self.w4 = config["w1"], config["w2"], config["w3"], config["w4"]
@@ -274,8 +278,8 @@ class Env:
 
     def _load_predictor(self):
         """加载预测器"""
-        model_path = Path(PROJECT_ROOT) / "predictor" / "model" / "best_model.pth"
-        constraint_path = Path(PROJECT_ROOT) / "predictor" / "model" / "constraint.pkl"
+        model_path = Path(PROJECT_ROOT) / "predictor" / "model" / "hotel" / "best_model.pth"
+        constraint_path = Path(PROJECT_ROOT) / "predictor" / "model" / "hotel" / "constraint.pkl"
 
         if os.path.exists(constraint_path):
             with open(constraint_path, 'rb') as f:
@@ -336,7 +340,7 @@ class Env:
         gathered = transform_data(gathered)  # 转化为(service_num, 6, 4)
         status = gathered.reshape(gathered.shape[0], -1)  # -1 表示自动计算维度
         if self.constraint is not None:
-            self.min_allocate = self.constraint(latency[0])
+            self.min_allocate = self.constraint(latency[0]) * self.scale_factor
         return status, latency
 
     def convert_to_ndarray(self, allocate):
@@ -376,25 +380,25 @@ class Env:
             print(f"剩余预热时间: {countdown}秒")
 
     def get_state_and_latency(self):
-        """返回形状为 (30,28,26) 和 (30,6) 的归一化数据"""
-        service_data = np.array(self.buffer)  # 形状 (30,28,24)
+        """返回形状为 (30,17,26) 和 (30,6) 的归一化数据"""
+        service_data = np.array(self.buffer)  # 形状 (30,17,24)
         latency_data = np.array(self.latency_buffer)  # 形状 (30,6)
-        config_data = np.array(self.config_buffer)  # 形状 (30,28)
-        replica_data = np.array(self.replica_ndarray)  # 形状 (28, )
+        config_data = np.array(self.config_buffer)  # 形状 (30,17)
+        replica_data = np.array(self.replica_ndarray)  # 形状 (17, )
 
         # ========== 特征拼接 ==========
         # 1. 将 config_data 扩展维度后与 service_data 拼接
-        config_expanded = config_data[..., np.newaxis]  # 形状 (30, 28, 1)
-        service_config = np.concatenate([service_data, config_expanded], axis=2)  # 形状 (30, 28, 25)
+        config_expanded = config_data[..., np.newaxis]  # 形状 (30, 17, 1)
+        service_config = np.concatenate([service_data, config_expanded], axis=2)  # 形状 (30, 17, 25)
 
         # 2. 将 replica_data 扩展后与上述结果拼接
         replica_expanded = np.tile(replica_data[np.newaxis, :, np.newaxis],
-                                   (service_config.shape[0], 1, 1))  # 形状 (30, 28, 1)
-        combined_data = np.concatenate([service_config, replica_expanded], axis=2)  # 最终形状 (30, 28, 26)
+                                   (service_config.shape[0], 1, 1))  # 形状 (30, 17, 1)
+        combined_data = np.concatenate([service_config, replica_expanded], axis=2)  # 最终形状 (30, 17, 26)
 
         # ========== 服务数据处理 ==========
         processed_serv = np.zeros_like(combined_data)
-        for s in range(28):  # 遍历每个服务
+        for s in range(17):  # 遍历每个服务
             # 提取特征 (10,25)
             features = combined_data[:, s, :25]
             scaled = self.scalers["service"][s].transform(features)  # 输入 (10,25)
@@ -405,7 +409,7 @@ class Env:
         # ========== 延迟数据处理 ==========
         processed_lat = self.scalers["latency"].transform(latency_data)  # 输入 (10,6)
 
-        return processed_serv, processed_lat  # 形状 (30, 28, 26), (30, 6)
+        return processed_serv, processed_lat  # 形状 (30, 17, 26), (30, 6)
 
     def step(self, action):
         """执行一个环境步骤
@@ -414,7 +418,8 @@ class Env:
             action: 要执行的动作索引
             
         Returns:
-            stacked_state: 当前状态 (30,28,26)
+            stacked_state: 当前状态 (30,17,26)
+            stacked_latency: 当前延迟 (30,6)
             reward: 奖励值
             done: 是否结束
         """
@@ -423,7 +428,7 @@ class Env:
         self._execute_action(action)
 
         # 2. 采集新数据
-        gathered, latency = self.gather_data()  #返回(28, 24) 和(6,)
+        gathered, latency = self.gather_data()  #返回(17, 24) 和(6,)
         self.buffer.append(gathered)
         self.latency_buffer.append(latency)
         self.config_buffer.append(self.convert_to_ndarray(deepcopy(self.allocate_dict)))
@@ -431,7 +436,7 @@ class Env:
         stacked_state, stacked_latency = self.get_state_and_latency()
         result = (deepcopy(stacked_state), deepcopy(stacked_latency))
         # 添加批次维度
-        state_batch = np.expand_dims(stacked_state, axis=0)  # shape (1,30,28,26)
+        state_batch = np.expand_dims(stacked_state, axis=0)  # shape (1,30,17,26)
         latency_batch = np.expand_dims(stacked_latency, axis=0)  # shape (1,30,6)
 
         # 得到预测概率
@@ -441,7 +446,7 @@ class Env:
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
-            pv = probs[0, 5].item()  # 索引5对应第六类
+            pv = probs[0, 3].item()  # 索引3对应第四类
         print(f"延迟概率分布：{probs}")
         print(f"违例概率: {pv * 100:.2f}%")
         print(f"当前延迟: {latency}")
@@ -454,6 +459,7 @@ class Env:
         if self.steps < self.done_steps:
             if self.steps % self.every_episode_steps == 0:
                 done = True
+                self.scale_factor = min(1.0, self.scale_factor + 1 / self.recover_episode)
         return result[0], result[1], reward, done
 
     def _execute_action(self, action):
@@ -553,7 +559,6 @@ class Env:
             if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
                 new_allocation[service] = self.min_perrep * self.replica_dict[service]
 
-        # 如果总资源上限，则恢复到初始配置
         if sum(new_allocation.values()) > self.max_cpu:
             new_allocation = deepcopy(self.initial_allocation)
 
@@ -578,9 +583,9 @@ class Env:
         def get_allocated_reward(allocated):
             if allocated < 0:
                 return 0  # 负数CPU数量无效
-            elif 0 <= allocated <= self.max_cpu / 2:
+            elif 0 <= allocated <= 120:
                 # 使用平方根函数实现增速递减
-                return 5 * math.sqrt(allocated / (self.max_cpu / 2))
+                return 5 * math.sqrt(allocated / 120)
             else:
                 return 5
 
@@ -629,40 +634,80 @@ class Env:
             return -clip((delay_penalty + ongoing_penalty) * 4.5) + get_allocated_reward(allocated)
 
     async def start_locust(self, user_count):
-        locust_cmd = [
-            "locust",  # 命令名称
-            "-f",  # 参数：指定locust文件路径
-            f"{PROJECT_ROOT}/mylocust/src/socialnetwork_mixed.py",
-            "--host",  # 参数：目标主机
-            "http://127.0.0.1:8080",
-            "--users",  # 用户数参数
-            f"{user_count}",
-            "--csv",  # 输出CSV文件
-            f"{PROJECT_ROOT}/mylocust/locust_log",
-            "--headless",  # 无头模式
-            "-t",  # 测试时长
-            f"{10 * 2000}s",
-            "-r",
-            "10"  # 每秒启动10个用户
+        # 初始化PID存储
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
+
+        # Master节点命令
+        master_cmd = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/hotelreservation_mixed.py", "--host", "http://127.0.0.1:5000",
+            "--master", "--headless", "--users", f"{user_count}", "-r", "10", "-t", f"{10 * 2000}s", "--csv",
+            f"{PROJECT_ROOT}/mylocust/locust_log", "--expect-workers=8", "--master-bind-host=0.0.0.0"
         ]
 
-        print(f"locust command:{locust_cmd}")
+        # Worker基础命令
+        worker_cmd_base = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/hotelreservation_mixed.py", "--worker",
+            "--master-host=127.0.0.1"
+        ]
 
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                # 启动Master节点
+                master_process = await asyncio.create_subprocess_exec(*master_cmd,
+                                                                      stdout=asyncio.subprocess.DEVNULL,
+                                                                      stderr=asyncio.subprocess.DEVNULL)
+                self.locust_pid_master = master_process.pid
+                print(f"Master started with PID: {self.locust_pid_master}")
+
+                # 启动8个Worker节点
+                worker_processes = []
+                for _ in range(8):
+                    wp = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                              stdout=asyncio.subprocess.DEVNULL,
+                                                              stderr=asyncio.subprocess.DEVNULL)
+                    worker_processes.append(wp)
+                    self.locust_pid_slaves.append(wp.pid)
+                    print(f"Worker started with PID: {wp.pid}")
+
+                # 验证进程状态
+                if await self._check_processes_alive():
+                    print("All processes started successfully")
+                    return True
+                else:
+                    print("Process startup failed, cleaning up...")
+                    await self._cleanup_processes()
+                    retry_count += 1
+
+            except Exception as e:
+                print(f"Startup failed: {str(e)}")
+                await self._cleanup_processes()
+                retry_count += 1
+
+        print("Failed to start after maximum retries")
+        return False
+
+    async def _check_processes_alive(self):
+        """检查所有进程是否存活"""
         try:
-            # 创建子进程，不等待立即返回
-            process = await asyncio.create_subprocess_exec(
-                *locust_cmd,
-                stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
-                stderr=asyncio.subprocess.DEVNULL)
+            # 检查Master
+            if self.locust_pid_master:
+                master = psutil.Process(self.locust_pid_master)
+                if master.status() == psutil.STATUS_ZOMBIE:
+                    return False
 
-            print(f"Locust已启动，PID: {process.pid}")
+            # 检查Workers
+            for pid in self.locust_pid_slaves:
+                worker = psutil.Process(pid)
+                if worker.status() == psutil.STATUS_ZOMBIE:
+                    return False
 
-            self.locust_pid = process.pid
-
-        except Exception as e:
-            # 捕获启动错误（如命令不存在、路径错误等）
-            print(f"启动Locust失败: {str(e)}")
-            raise
+            return True
+        except psutil.NoSuchProcess:
+            return False
 
     async def start_locust_eval(self, user_count, locust_file_name):
         locust_cmd = [
@@ -701,33 +746,33 @@ class Env:
             raise
 
     def stop_locust(self):
-        if self.locust_pid:
-            _, _ = execute_command(f"sudo kill {self.locust_pid}")
-            print("Locust已停止")
-        else:
-            print("Locust未启动")
+        if self.locust_pid_master:
+            _, _ = execute_command(f"sudo kill {self.locust_pid_master}")
+        for pid in self.locust_pid_slaves:
+            _, _ = execute_command(f"sudo kill {pid}")
+        # 等待5秒 确保locust已停止
+        time.sleep(5)
+        print("Locust已停止")
 
     def reset_deploy(self):
         time.sleep(10)
         #重置实验环境
         command = ("cd ~/DeepDynamicRM/deploy && "
                    "~/miniconda3/envs/DDRM/bin/python3 "
-                   "deploy_benchmark.py")
+                   "deploy_hotel.py")
         execute_command(command, stream_output=True)
 
     async def reset(self):
         """重置环境"""
-        self.episode_count += 1
-        if self.episode_count % 10 == 0:
-            print("停止locust")
-            self.stop_locust()
-            self.reset_deploy()
+        self.stop_locust()
+        self.reset_deploy()
 
-        user_count_list = [50, 100, 150, 200, 250, 300, 350, 400, 450]
+        user_count_list = [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700]
         print("重置环境")
         print("停止locust")
         self.stop_locust()
-        self.locust_pid = None
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
         print("清空缓存")
         self.buffer.clear()
         self.latency_buffer.clear()

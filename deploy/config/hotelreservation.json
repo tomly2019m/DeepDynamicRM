@@ -1,7 +1,7 @@
 {
     "name": "hotelreservation",
     "replica_cpus": 4,
-    "max_cpu": 270,
+    "max_cpu": 392,
     "service_list": [
         "frontend",
         "geo",

@@ -11,9 +11,9 @@ class VPACPURecommender:
         self,
         min_allowed: float,
         max_allowed: float,
-        target_percentile: float = 0.95,
+        target_percentile: float = 0.90,
         margin: float = 0.2,
-        window_size: int = 100,  # 调整为100秒窗口（每秒1个样本）
+        window_size: int = 50,  # 调整为100秒窗口（每秒1个样本）
         decay_factor: float = 0.99,
     ):
         self.target_percentile = target_percentile

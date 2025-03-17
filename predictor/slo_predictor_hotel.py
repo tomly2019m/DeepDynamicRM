@@ -48,6 +48,59 @@ assert gathered.shape[1] == replicas.shape[0] == 17, \
 n_timesteps = gathered.shape[0]
 print(f"数据加载成功！总时间步: {n_timesteps}")
 
+stage_config = [
+    # 1000用户（4个阶段）
+    (0, 300),
+    (300, 300),
+    (600, 300),
+    (900, 300),
+    # 1300用户（4个阶段）
+    (1200, 300),
+    (1500, 300),
+    (1800, 300),
+    (2100, 300),
+    # 1600用户（4个阶段）
+    (2400, 300),
+    (2700, 300),
+    (3000, 300),
+    (3300, 300),
+    # 1900用户（4个阶段）
+    (3600, 300),
+    (3900, 300),
+    (4200, 300),
+    (4500, 300),
+    # 2200用户（4个阶段）
+    (4800, 300),
+    (5100, 300),
+    (5400, 300),
+    (5700, 300),
+    # 2500用户（4个阶段）
+    (6000, 300),
+    (6300, 300),
+    (6600, 300),
+    (6900, 300),
+    # 2800用户（4个阶段）
+    (7200, 300),
+    (7500, 300),
+    (7800, 300),
+    (8100, 300),
+    # 3100用户（4个阶段）
+    (8400, 300),
+    (8700, 300),
+    (9000, 300),
+    (9300, 300),
+    # 3400用户（4个阶段）
+    (9600, 300),
+    (9900, 300),
+    (10200, 300),
+    (10500, 300),
+    # 3700用户（4个阶段）
+    (10800, 300),
+    (11100, 300),
+    (11400, 300),
+    (11700, 300),
+]
+
 
 # ----------------------------------
 # 步骤3：特征工程处理
@@ -58,53 +111,6 @@ def process_gathered(gathered, replicas):
 
     # 数据清洗
     # 定义36个阶段的起始索引和长度（所有阶段均为500条数据）
-    stage_config = [
-        # 1000用户（4个阶段）
-        (0, 500),
-        (500, 500),
-        (1000, 500),
-        (1500, 500),
-        # 1300用户（4个阶段）
-        (2000, 500),
-        (2500, 500),
-        (3000, 500),
-        (3500, 500),
-        # 1600用户（4个阶段）
-        (4000, 500),
-        (4500, 500),
-        (5000, 500),
-        (5500, 500),
-        # 1900用户（4个阶段）
-        (6000, 500),
-        (6500, 500),
-        (7000, 500),
-        (7500, 500),
-        # 2200用户（4个阶段）
-        (8000, 500),
-        (8500, 500),
-        (9000, 500),
-        (9500, 500),
-        # 2500用户（4个阶段）
-        (10000, 500),
-        (10500, 500),
-        (11000, 500),
-        (11500, 500),
-        # 2800用户（4个阶段）
-        (12000, 500),
-        (12500, 500),
-        (13000, 500),
-        (13500, 500),
-        # 3100用户（4个阶段）
-        (14000, 500),
-        (14500, 500),
-        (15000, 500),
-        (15500, 500),
-        # 3400用户（4个阶段）
-        (16000, 500),
-        (16500, 500),
-        (17000, 500),
-        (17500, 500)
-    ]
 
     # 生成需要删除的索引列表（每个阶段删除前9条数据）
     remove_indices = []
@@ -197,13 +203,12 @@ def process_data(window_size=30, pred_window=5, threshold=200, save_scalers=True
         samples_lat = []
         labels = []
 
-        cleaned_stage_boundaries = [(0, 490), (491, 981), (982, 1472), (1473, 1963), (1964, 2454), (2455, 2945),
-                                    (2946, 3436), (3437, 3927), (3928, 4418), (4419, 4909), (4910, 5400), (5401, 5891),
-                                    (5892, 6382), (6383, 6873), (6874, 7364), (7365, 7855), (7856, 8346), (8347, 8837),
-                                    (8838, 9328), (9329, 9819), (9820, 10310), (10311, 10801), (10802, 11292),
-                                    (11293, 11783), (11784, 12274), (12275, 12765), (12766, 13256), (13257, 13747),
-                                    (13748, 14238), (14239, 14729), (14730, 15220), (15221, 15711), (15712, 16202),
-                                    (16203, 16693), (16694, 17184), (17185, 17675)]
+        # 动态生成清洗后的阶段边界
+        cleaned_stage_boundaries = []
+        for stage_start, stage_length in stage_config:
+            cleaned_start = stage_start + 9  # 删除前9条后的起始位置
+            cleaned_end = stage_start + stage_length - 1  # 原阶段结束位置
+            cleaned_stage_boundaries.append((cleaned_start, cleaned_end))
 
         for stage_start, stage_end in cleaned_stage_boundaries:
             # 跳过长度不足的阶段
@@ -231,16 +236,12 @@ def process_data(window_size=30, pred_window=5, threshold=200, save_scalers=True
                 label = 0
                 if max_p99 <= 40:
                     label = 0
-                elif max_p99 <= 80:
+                elif max_p99 <= 100:
                     label = 1
-                elif max_p99 <= 120:
-                    label = 2
-                elif max_p99 <= 160:
-                    label = 3
                 elif max_p99 <= 200:
-                    label = 4
+                    label = 2
                 else:
-                    label = 5
+                    label = 3
 
                 samples_serv.append(serv_window)
                 samples_lat.append(lat_window)
@@ -284,7 +285,7 @@ def process_data(window_size=30, pred_window=5, threshold=200, save_scalers=True
         print(f"服务数据形状: {serv.shape}")
         print(f"延迟数据形状: {lat.shape}")
         print(
-            f"标签分布: 0={np.sum(labels==0)}, 1={np.sum(labels==1)}, 2={np.sum(labels==2)}, 3={np.sum(labels==3)}, 4={np.sum(labels==4)}, 5={np.sum(labels==5)}"
+            f"标签分布: 0={np.sum(labels==0)}, 1={np.sum(labels==1)}, 2={np.sum(labels==2)}, 3={np.sum(labels==3)}"
         )
 
     print_dataset_info("训练集", X_train_serv, X_train_lat, y_train)
@@ -465,7 +466,7 @@ class DynamicSLOPredictor(nn.Module):
             nn.Dropout(p=0.3),
             nn.Linear(256, 64),
             nn.GELU(),
-            nn.Linear(64, 6)  # 输出6个类别
+            nn.Linear(64, 4)  # 输出6个类别
         )
 
     def forward(self, service_data, latency_data):
@@ -756,7 +757,7 @@ def main(epochs, learning_rate, batch_size, service_mode, weight_decay):
     log_info("计算类别权重...")
     from sklearn.utils.class_weight import compute_class_weight
     _, _, y_train = train_data
-    class_weights = compute_class_weight('balanced', classes=np.arange(6), y=y_train)
+    class_weights = compute_class_weight('balanced', classes=np.arange(4), y=y_train)
     class_weights = torch.tensor(class_weights, dtype=torch.float32)
 
     # 记录类别分布
