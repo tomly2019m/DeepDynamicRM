@@ -280,6 +280,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             if current_exp_time == exp_time:
                 for pid in pids:
                     _, _ = execute_command(f"sudo kill {pid}")
+                    time.sleep(5)
                 break
 
     finally:
@@ -366,10 +367,10 @@ async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
-    # kill_slave()
-    # time.sleep(10)
-    # setup_slave()
-    # time.sleep(10)
+    kill_slave()
+    time.sleep(10)
+    setup_slave()
+    time.sleep(10)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
@@ -391,15 +392,12 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [2500, 2800, 3100, 3400, 3700]:
-        # for users in [3700]:
-        #重置实验环境
-        # if users == 1000 or users == 2500:
-        #     command = ("cd ~/DeepDynamicRM/deploy && "
-        #                "~/miniconda3/envs/DDRM/bin/python3 "
-        #                "deploy_hotel.py")
-        #     execute_command(command, stream_output=True)
-        # time.sleep(10)
+    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700]:
+        command = ("cd ~/DeepDynamicRM/deploy && "
+                   "~/miniconda3/envs/DDRM/bin/python3 "
+                   "deploy_hotel.py")
+        execute_command(command, stream_output=True)
+        time.sleep(10)
 
         for load_type in ["constant", "daynight", "bursty", "noisy"]:
             # for load_type in ["constant"]:

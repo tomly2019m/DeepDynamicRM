@@ -1,0 +1,226 @@
+{
+    "compose-post-redis": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "compose-post-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "home-timeline-redis": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "home-timeline-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 16.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "media-filter-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 128.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "media-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 2.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "nginx-thrift": {
+        "min_allowed": 0.2,
+        "max_allowed": 16.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "post-storage-memcached": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "post-storage-mongodb": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "post-storage-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 16.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "social-graph-mongodb": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "social-graph-redis": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "social-graph-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "text-filter-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "text-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "unique-id-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "url-shorten-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-memcached": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-mention-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-mongodb": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-timeline-mongodb": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-timeline-redis": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "user-timeline-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "write-home-timeline-rabbitmq": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "write-home-timeline-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "write-user-timeline-rabbitmq": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    },
+    "write-user-timeline-service": {
+        "min_allowed": 0.2,
+        "max_allowed": 4.0,
+        "target_percentile": 0.95,
+        "margin": 0.2,
+        "window_size": 100,
+        "decay_factor": 0.99
+    }
+}
