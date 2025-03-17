@@ -1,6 +1,4 @@
 import argparse
-from asyncio import subprocess
-from copy import deepcopy
 import json
 import os
 import socket
@@ -19,7 +17,6 @@ from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
 from communication.sync import distribute_project
-from communication.MAB import UCB_Bandit
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--exp_time", type=int, default=1500, help="experiment time")
@@ -201,32 +198,6 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
 
 # 配置好slave，在slave上启动监听
 def setup_slave():
-    # 从配置文件中读取主机名和端口
-    comm_config = ""
-    with open("./comm.json", "r") as f:
-        comm_config = json.load(f)
-    hosts = comm_config["slaves"]
-    port = comm_config["port"]
-
-    # 在每个slave节点上启动监听服务
-    for host in hosts:
-        # 通过SSH连接到slave节点
-
-        # 清理旧的进程
-        command = f"sudo kill -9 $(sudo lsof -t -i :{port})"
-        execute_command_via_system_ssh(host, username, command)
-
-        command = ("cd ~/DeepDynamicRM/communication && "
-                   "nohup ~/miniconda3/envs/DDRM/bin/python3 "
-                   f"slave.py --port {port}")
-
-        execute_command_via_system_ssh(host, username, command, async_exec=True)
-
-        print(f"在 {host} 上启动监听服务,端口:{port}")
-
-
-# 配置好slave，在slave上启动监听
-def setup_slave():
     hosts = ["rm1", "rm2", "rm3", "rm4"]
     port = 12345
     username = "tomly"
@@ -236,7 +207,7 @@ def setup_slave():
     command = (
         f"sudo kill -9 $(sudo lsof -t -i :{port}) || true; "  # 清理旧进程
         "cd /home/tomly/DeepDynamicRM/communication && "  # 切换到工作目录
-        f"nohup {python_path} slave_hotel.py --port {port} > /dev/null 2>&1 &"  # 后台启动服务
+        f"nohup {python_path} slave.py --port {port} > /dev/null 2>&1 &"  # 后台启动服务
     )
 
     for host in hosts:
