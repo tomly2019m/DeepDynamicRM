@@ -1,24 +1,14 @@
 import argparse
 import os
-import subprocess
 import sys
 import time
-import docker
 import json
-from util.ssh import execute_command_via_system_ssh
-from util.parser import parse_swarm_output, parse_node_label
-
-join_cluster_command = ''
-client = docker.from_env()
+import paramiko
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--docker_compose",
-                    type=str,
-                    default="~/DeepDynamicRM/benchmarks/hotelReservation/docker-compose.yml",
-                    help="benchmark yaml file path")
 parser.add_argument("--bench_dir",
                     type=str,
                     default="~/DeepDynamicRM/benchmarks/hotelReservation/",
@@ -32,9 +22,7 @@ parser.add_argument("--benchmark_name", type=str, default="hotel", help="benchma
 args = parser.parse_args()
 
 username = args.username
-docker_compose_file = args.docker_compose
 benchmark_config = args.benchmark_config
-
 benchmark_name = args.benchmark_name
 
 
@@ -55,141 +43,149 @@ def load_config(file_path: str):
 config = load_config('./config/config.json')
 
 
-# 初始化docker swarm集群，返回加入集群命令
-def init_master():
-    global join_cluster_command
-    swarm_init_command = "docker swarm init"
-    master_host = config["cluster"]["master"]["host"]
-    result, err = execute_command_via_system_ssh(master_host, username, swarm_init_command)
-    if err:
-        raise RuntimeError(f"执行初始化命令出错: {err}")
+# 使用paramiko执行远程命令
+def execute_command(host, username, command, stream_output=False):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(hostname=host, username=username)
+        stdin, stdout, stderr = client.exec_command(command)
 
-    join_cluster_command = parse_swarm_output(result)["worker_command"]
-    assert "token" in join_cluster_command
-    print(join_cluster_command)
-    print("初始化管理节点完成")
+        if stream_output:
+            # 实时输出结果
+            while True:
+                line = stdout.readline()
+                if not line:
+                    break
+                print(line.strip())
 
+        stdout_str = stdout.read().decode('utf-8')
+        stderr_str = stderr.read().decode('utf-8')
 
-# 解散docker swarm集群
-def dissolve_cluster():
-    for worker in config["cluster"]["workers"]:
-        leave_command = "docker swarm leave"
-        _, err = execute_command_via_system_ssh(worker["host"], username, leave_command)
-        if err:
-            raise RuntimeError(f"{worker['name']}执行离开集群命令出错: {err}")
-        print(f"工作节点 {worker['name']} 离开集群成功")
-    master_host = config["cluster"]["master"]["host"]
-    leave_command = "docker swarm leave -f"
-    _, err = execute_command_via_system_ssh(master_host, username, leave_command)
-    if err:
-        raise RuntimeError(f"管理节点 {master_host} 执行离开集群命令出错: {err}")
-    print(f"管理节点 {master_host} 离开集群成功")
+        return stdout_str, stderr_str
+    except Exception as e:
+        return "", str(e)
+    finally:
+        client.close()
 
 
-# 配置节点标签
-def config_node_label(node_name: str, label: str):
-    config_node_label_command = f"docker node update --label-add {label} {node_name}"
-    result, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username,
-                                                 config_node_label_command)
-    if err:
-        raise RuntimeError(f"执行配置节点标签命令出错: {err}")
+# 停止所有节点上的服务
+def stop_all_services():
+    nodes = [config["cluster"]["master"]] + config["cluster"]["workers"]
+
+    for node in nodes:
+        print(f"正在停止节点 {node['name']} 上的服务...")
+        # 使用sudo强制删除所有容器
+        stop_command = "sudo docker rm -f $(sudo docker ps -aq) 2>/dev/null || true"
+        stdout, stderr = execute_command(node["host"], username, stop_command)
+        if stderr:
+            print(f"警告: 停止节点 {node['name']} 上的服务时出错: {stderr}")
+
+    print("所有服务已强制停止并删除")
+
+
+# 在指定节点上部署服务
+def deploy_to_node(node_name, node_host, compose_file):
+    compose_path = f"{PROJECT_ROOT}/benchmarks/hotelReservation/{compose_file}"
+
+    # 确保目标目录存在
+    mkdir_command = f"mkdir -p {PROJECT_ROOT}/benchmarks/hotelReservation"
+    stdout, stderr = execute_command(node_host, username, mkdir_command)
+    if stderr:
+        raise RuntimeError(f"在节点 {node_name} 上创建目录时出错: {stderr}")
+
+    # 部署服务
+    deploy_command = f"cd {PROJECT_ROOT}/benchmarks/hotelReservation && docker compose -f {compose_file} up -d"
+    print(f"正在节点 {node_name} 上部署服务，命令: {deploy_command}")
+    stdout, stderr = execute_command(node_host, username, deploy_command, stream_output=True)
+    # if stderr:
+    #     raise RuntimeError(f"在节点 {node_name} 上部署服务时出错: {stderr}")
+
+    print(f"节点 {node_name} 上的服务部署成功")
+
+
+# 检查服务状态
+def check_service_status(node_name, node_host):
+    check_command = "sudo docker ps --format '{{.Names}}: {{.Status}}'"
+    result, stderr = execute_command(node_host, username, check_command)
+    if stderr:
+        raise RuntimeError(f"检查节点 {node_name} 上的服务状态时出错: {stderr}")
+
+    print(f"节点 {node_name} 上的服务状态：")
     print(result)
 
+    # 检查每个容器的状态
+    all_running = True
+    if result.strip():
+        containers = result.strip().split('\n')
+        for container in containers:
+            if "Up" not in container:
+                print(f"警告：容器 {container.split(':')[0]} 未处于运行状态")
+                all_running = False
 
-# 检查节点标签,确保节点标签与配置文件一致
-def check_node_label() -> bool:
-    check_command = 'docker node inspect --format "{{ .Description.Hostname }}: {{ .Spec.Labels }}" $(docker node ls -q)'
-    result, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, check_command)
-    if err:
-        raise RuntimeError(f"执行检查节点标签命令出错: {err}")
-    print(result)
-    nodes_label = parse_node_label(result)
-    master_label = nodes_label[config["cluster"]["master"]["name"]]["type"]
-    if master_label not in config["cluster"]["master"]["label"]:
-        raise RuntimeError(f"管理节点标签与配置文件不一致: {master_label}")
-    for worker in config["cluster"]["workers"]:
-        worker_label = nodes_label[worker["name"]]["type"]
-        if worker_label not in worker["label"]:
-            raise RuntimeError(f"工作节点标签与配置文件不一致: {worker_label}")
-    return True
-
-
-# 初始化docker swarm集群
-def setup_swarm_cluster():
-    for worker in config["cluster"]["workers"]:
-        _, err = execute_command_via_system_ssh(worker["host"], username, join_cluster_command)
-        if err:
-            raise RuntimeError(f"执行加入集群命令出错: {err}")
-        print(f"工作节点 {worker['name']} 加入集群成功")
-    print("集群初始化完成")
-    cluster_info_command = "docker node ls"
-    result, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"], username, cluster_info_command)
-    if err:
-        raise RuntimeError(f"执行集群信息命令出错: {err}")
-    print(result)
-
-    # 配置节点标签
-    config_node_label(config["cluster"]["master"]["name"], config["cluster"]["master"]["label"])
-    for worker in config["cluster"]["workers"]:
-        config_node_label(worker["name"], worker["label"])
-    print("节点标签配置完成")
-    if check_node_label():
-        print("节点标签检查完成")
+        if all_running:
+            print(f"节点 {node_name} 上的所有容器都在正常运行")
+        else:
+            print(f"警告：节点 {node_name} 上有容器未正常运行")
+        return all_running
     else:
-        raise RuntimeError("节点标签检查失败")
+        print(f"警告：节点 {node_name} 上没有运行中的容器")
+        return False
 
 
-def docker_stack_rm(stack_name: str):
-    docker_stack_rm_command = f"docker stack rm {stack_name}"
-    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"],
-                                            username,
-                                            docker_stack_rm_command,
-                                            stream_output=True)
-    if err:
-        raise RuntimeError(f"执行删除栈命令出错: {err}")
-    print(f"栈 {stack_name} 删除成功")
-
-
+# 部署基准测试
 def deploy_benchmark():
     resource_config = load_config(benchmark_config)
-    docker_stack_deploy_command = f"cd {PROJECT_ROOT}/benchmarks/hotelReservation && docker stack deploy -c {docker_compose_file} {benchmark_name}"
-    print(docker_stack_deploy_command)
-    _, err = execute_command_via_system_ssh(config["cluster"]["master"]["host"],
-                                            username,
-                                            docker_stack_deploy_command,
-                                            stream_output=True)
-    if err:
-        raise RuntimeError(f"执行部署命令出错: {err}")
-    print("等待所有副本拉起")
-    converged = False
-    waits = 0
-    while not converged:
-        for service in client.services.list():
-            command = "docker service ls --format '{{.Replicas}}' --filter 'id=" + service.id + "'"
-            out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True,
-                                          universal_newlines=True).strip()
-            if err:
-                raise RuntimeError(f"执行检查服务副本命令出错: {err}")
-            print("service: ", service.name, "replicas: ", out)
-            raw_replicas = out.split('(')[0].strip()
 
-            actual = int(raw_replicas.split('/')[0])
-            desired = int(raw_replicas.split('/')[1])
-            converged = actual == desired
-            if not converged:
-                break
+    # 停止所有现有服务
+    stop_all_services()
 
-        time.sleep(5)
-        waits += 1
-        if waits > 60:
-            docker_stack_rm(resource_config["name"])
-            raise RuntimeError("服务副本未完全拉起，等待超时")
-    print("部署完成")
+    # 在四个节点上分别部署服务
+    node_configs = {
+        "rm1": {
+            "file": "docker-compose-rm1.yml",
+            "host": "rm1"
+        },
+        "rm2": {
+            "file": "docker-compose-rm2.yml",
+            "host": "rm2"
+        },
+        "rm3": {
+            "file": "docker-compose-rm3.yml",
+            "host": "rm3"
+        },
+        "rm4": {
+            "file": "docker-compose-rm4.yml",
+            "host": "rm4"
+        }
+    }
+
+    # 按照4-1-2-3的顺序部署
+    deployment_order = ["rm4", "rm1", "rm2", "rm3"]
+    for node_name in deployment_order:
+        node_config = node_configs[node_name]
+        deploy_to_node(node_name, node_config["host"], node_config["file"])
+
+    # 等待所有服务启动完成
+    print("等待所有服务启动...")
+    time.sleep(10)
+
+    # 检查所有节点上的服务状态
+    print("检查所有节点上的服务状态...")
+    all_nodes_running = True
+
+    for node_name in deployment_order:
+        node_running = check_service_status(node_name, node_name)
+        if not node_running:
+            all_nodes_running = False
+
+    if all_nodes_running:
+        print("所有节点上的服务都已成功启动！")
+    else:
+        print("警告：部分节点上的服务未能正常启动，请检查日志获取详细信息。")
+
+    return all_nodes_running
 
 
 if __name__ == "__main__":
-    docker_stack_rm(benchmark_name)
-    dissolve_cluster()
-    init_master()
-    setup_swarm_cluster()
     deploy_benchmark()

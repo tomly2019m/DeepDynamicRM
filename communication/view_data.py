@@ -24,7 +24,7 @@ def check_npy_files():
         try:
             data = np.load(file_path)
             # 删除前10个数据点
-            data = data[10:]
+            # data = data[10:]
             print(f"\n文件名: {file}")
             print(f"数据形状: {data.shape}")
             print(f"数据类型: {data.dtype}")

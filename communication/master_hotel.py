@@ -9,6 +9,7 @@ import time
 import asyncio
 from typing import Dict, Tuple
 import paramiko
+import psutil
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -123,34 +124,49 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
         "--worker",
         "--master-host=127.0.0.1"  # 假设master在本地运行
     ]
-
-    try:
-        # 启动master进程
-        master_process = await asyncio.create_subprocess_exec(*master_cmd,
-                                                              stdout=asyncio.subprocess.DEVNULL,
-                                                              stderr=asyncio.subprocess.DEVNULL)
-        print(f"Locust master started with PID: {master_process.pid}")
-        pids.append(master_process.pid)
-        # 启动8个worker进程
-        worker_processes = []
-        for i in range(8):
-            worker_process = await asyncio.create_subprocess_exec(*worker_cmd_base,
+    while True:
+        try:
+            # 启动master进程
+            master_process = await asyncio.create_subprocess_exec(*master_cmd,
                                                                   stdout=asyncio.subprocess.DEVNULL,
                                                                   stderr=asyncio.subprocess.DEVNULL)
-            worker_processes.append(worker_process)
-            print(f"Worker {i} started with PID: {worker_process.pid}")
+            print(f"Locust master started with PID: {master_process.pid}")
+            pids.append(master_process.pid)
+            # 启动8个worker进程
+            worker_processes = []
+            for i in range(8):
+                worker_process = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                                      stdout=asyncio.subprocess.DEVNULL,
+                                                                      stderr=asyncio.subprocess.DEVNULL)
+                worker_processes.append(worker_process)
+                print(f"Worker {i} started with PID: {worker_process.pid}")
 
-        # 将进程对象保存在全局变量中以便后续管理
-        locust_process = [master_process] + worker_processes
-        pids.extend([master_process.pid] + [worker_process.pid for worker_process in worker_processes])
-    except Exception as e:
-        print(f"启动Locust失败: {str(e)}")
-        # 清理已启动的进程
-        if 'master_process' in locals():
-            master_process.terminate()
-        for wp in worker_processes:
-            wp.terminate()
-        raise
+            # 将进程对象保存在全局变量中以便后续管理
+            locust_process = [master_process] + worker_processes
+            pids.extend([master_process.pid] + [worker_process.pid for worker_process in worker_processes])
+            # 检查pids列表中的进程是否存在
+            check_pids = True
+            for pid in pids:
+                if not psutil.pid_exists(pid):
+                    print(f"进程{pid}不存在")
+                    check_pids = False
+                    break
+            if check_pids:
+                break
+            else:
+                for pid in pids:
+                    print(f"清理进程{pid}")
+                    _, _ = execute_command(f"sudo kill {pid}")
+                time.sleep(5)
+                print(f"等待5秒后重新启动")
+        except Exception as e:
+            print(f"启动Locust失败: {str(e)}")
+            # 清理已启动的进程
+            if 'master_process' in locals():
+                master_process.terminate()
+            for wp in worker_processes:
+                wp.terminate()
+            raise
 
     mab = UCB_Bandit(min_core)
     init_allocate = deepcopy(mab.get_init_allocate())
@@ -174,15 +190,16 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
             tasks.clear()
             while True:
-                modify = False
                 start_time = time.time()
+                gathered = {"cpu": {}, "memory": {}, "io": {}, "network": {}}
+                modify = False
                 for connection in connections.values():
                     result = connection.send_command_sync("collect")
                     if result == "modify":
                         for connection in connections.values():
                             # 确保容器状态稳定再flush
                             print("等待容器状态稳定")
-                            time.sleep(10)
+                            time.sleep(5)
                             connection.send_command_sync("flush")
                         modify = True
                         break
@@ -191,14 +208,6 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                     gathered["memory"] = concat_data(gathered["memory"], data_dict["memory"])
                     gathered["io"] = concat_data(gathered["io"], data_dict["io"])
                     gathered["network"] = concat_data(gathered["network"], data_dict["network"])
-                # 检查gathered中是否存在空数据或空列表
-                for k, data in gathered.items():
-                    for key, v in data.items():
-                        if not v:
-                            print(f"gathered中存在空数据或空列表，重新采集")
-                            print(f"gathered: {gathered}")
-                            modify = True
-                            break
                 if not modify:
                     break
 
@@ -357,10 +366,10 @@ async def main():
     global gathered_list, replicas, exp_time
     distribute_project(username=username)
     # 从配置文件中读取主机名和端口，然后创建连接
-    kill_slave()
-    time.sleep(10)
-    setup_slave()
-    time.sleep(10)
+    # kill_slave()
+    # time.sleep(10)
+    # setup_slave()
+    # time.sleep(10)
     comm_config = ""
     with open("./comm.json", "r") as f:
         comm_config = json.load(f)
@@ -382,15 +391,15 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700]:
-    # for users in [3700]:
+    for users in [2500, 2800, 3100, 3400, 3700]:
+        # for users in [3700]:
         #重置实验环境
-        if users == 1000 or users == 2500:
-            command = ("cd ~/DeepDynamicRM/deploy && "
-                       "~/miniconda3/envs/DDRM/bin/python3 "
-                       "deploy_hotel.py")
-            execute_command(command, stream_output=True)
-        time.sleep(10)
+        # if users == 1000 or users == 2500:
+        #     command = ("cd ~/DeepDynamicRM/deploy && "
+        #                "~/miniconda3/envs/DDRM/bin/python3 "
+        #                "deploy_hotel.py")
+        #     execute_command(command, stream_output=True)
+        # time.sleep(10)
 
         for load_type in ["constant", "daynight", "bursty", "noisy"]:
             # for load_type in ["constant"]:

@@ -51,8 +51,7 @@ def handle_command(command: str):
         response = "set cpu limit success"
 
     elif command == "flush":
-        flush()
-        response = "flush success"
+        response = json.dumps(flush())
     elif command == "close":
         response = "stop"
     return response

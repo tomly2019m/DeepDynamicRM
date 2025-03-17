@@ -613,6 +613,7 @@ def flush():
     set_running_container_list_via_docker_api()
     set_container_name_id()
     set_container_pids()
+    return service_container
 
 
 # 定时的逻辑应该在master中，在master中定时采集数据，而不是在data_collector中
@@ -731,4 +732,9 @@ def testflush():
 
 
 if __name__ == "__main__":
+    # test_get_container_cpu_usage()
+    # test_get_io_usage()
+    # test_get_memory_usage()
+    # test_set_running_container_list()
+    # test_get_network_usage()
     testflush()

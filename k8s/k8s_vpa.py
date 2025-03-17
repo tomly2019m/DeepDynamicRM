@@ -1,19 +1,20 @@
 import numpy as np
-from typing import List, Optional
+from typing import Dict, List, Optional
 from collections import deque
-import matplotlib.pyplot as plt
+import json
+from pathlib import Path
 
 
 class VPACPURecommender:
 
     def __init__(
-            self,
-            target_percentile: float = 0.95,
-            margin: float = 0.2,
-            min_allowed: float = 0.1,
-            max_allowed: float = 4.0,
-            window_size: int = 86400,  # 默认24小时数据 (秒级采样)
-            decay_factor: float = 0.99,  # 时间衰减因子
+        self,
+        min_allowed: float,
+        max_allowed: float,
+        target_percentile: float = 0.95,
+        margin: float = 0.2,
+        window_size: int = 100,  # 调整为100秒窗口（每秒1个样本）
+        decay_factor: float = 0.99,
     ):
         self.target_percentile = target_percentile
         self.margin = margin
@@ -26,7 +27,7 @@ class VPACPURecommender:
         self.samples = deque(maxlen=window_size)
 
     def add_sample(self, value: float, timestamp: float):
-        """添加带权重的样本"""
+        """添加带时间戳的样本"""
         self.samples.append((timestamp, value))
 
     def _apply_time_decay(self) -> List[float]:
@@ -88,60 +89,37 @@ class VPACPURecommender:
         # 5. 边界约束
         return np.clip(recommendation, self.min_allowed, self.max_allowed)
 
-    def visualize(self, save_path: str = None):
-        """可视化当前样本分布与推荐值"""
-        if not self.samples:
-            return
 
-        weighted = self._apply_time_decay()
-        filtered = self._filter_outliers(weighted)
-        rec = self.recommend()
+class MultiServiceVPAManager:
 
-        plt.figure(figsize=(10, 6))
+    def __init__(self, config_path: str = "./config/service_config.json"):
+        # 加载服务配置
+        self.config = self._load_config(config_path)
 
-        # 原始样本分布
-        plt.subplot(2, 1, 1)
-        plt.hist([s[1] for s in self.samples], bins=50, alpha=0.5, label='Raw Samples')
-        plt.axvline(rec, color='r', linestyle='--', label='Recommendation')
-        plt.title("Raw CPU Usage Samples")
-        plt.legend()
+        # 初始化每个服务的推荐器
+        self.recommenders: Dict[str, VPACPURecommender] = {}
+        for svc, params in self.config.items():
+            self.recommenders[svc] = VPACPURecommender(min_allowed=params["min_allowed"],
+                                                       max_allowed=params["max_allowed"],
+                                                       window_size=100)
 
-        # 处理后的样本分布
-        plt.subplot(2, 1, 2)
-        plt.hist(filtered, bins=50, alpha=0.5, color='g', label='Processed Samples')
-        plt.axvline(rec, color='r', linestyle='--', label='Recommendation')
-        plt.title("After Time Decay & Outlier Filtering")
-        plt.legend()
+    @staticmethod
+    def _load_config(path: str) -> Dict:
+        """加载服务配置文件"""
+        config_file = Path(path)
+        if not config_file.exists():
+            raise FileNotFoundError(f"Config file {path} not found")
 
-        if save_path:
-            plt.savefig(save_path)
-        else:
-            plt.show()
+        with open(config_file, 'r') as f:
+            return json.load(f)
 
+    def add_samples(self, samples: Dict[str, float], timestamp: float):
+        """批量添加服务样本（字典格式）"""
+        for svc, usage in samples.items():
+            if svc not in self.recommenders:
+                raise KeyError(f"服务 '{svc}' 未在配置文件中定义")
+            self.recommenders[svc].add_sample(usage, timestamp)
 
-# 测试用例
-def test_vpa():
-    # 模拟24小时数据（峰值在最后4小时）
-    vpa = VPACPURecommender()
-    base_time = 1609459200  # 2021-01-01 00:00:00
-
-    # 前20小时：低负载
-    for t in range(0, 20 * 3600, 60):
-        vpa.add_sample(value=0.5 + 0.1 * np.random.rand(), timestamp=base_time + t)
-
-    # 最后4小时：高负载
-    for t in range(20 * 3600, 24 * 3600, 60):
-        vpa.add_sample(value=1.5 + 0.5 * np.random.rand(), timestamp=base_time + t)
-
-    # 添加异常值
-    vpa.add_sample(10.0, base_time + 24 * 3600)  # 异常高值
-
-    rec = vpa.recommend()
-    print(f"Recommended CPU: {rec:.2f} cores")
-
-    # 可视化
-    vpa.visualize()
-
-
-if __name__ == "__main__":
-    test_vpa()
+    def get_recommendations(self) -> Dict[str, float]:
+        """获取所有服务的CPU推荐值"""
+        return {svc: recommender.recommend() for svc, recommender in self.recommenders.items()}
