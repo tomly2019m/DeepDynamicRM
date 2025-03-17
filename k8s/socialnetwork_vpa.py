@@ -81,6 +81,23 @@ class SlaveConnection:
 async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], users: int, load_type: str):
     global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
 
+    # 创建实验数据保存目录
+    time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    exp_data_dir = f"{PROJECT_ROOT}/exp_data/{time_str}_users{users}_{load_type}"
+    os.makedirs(exp_data_dir, exist_ok=True)
+
+    # 创建单个数据CSV文件并写入表头
+    exp_data_csv_path = f"{exp_data_dir}/experiment_data.csv"
+    with open(exp_data_csv_path, "w") as f:
+        # 写入表头：时间戳、延迟指标、各服务CPU分配、总CPU
+        header = "timestamp,rps,latency_90,latency_95,latency_98,latency_99,latency_999"
+        # 添加所有服务的CPU分配列
+        for service in services:
+            header += f",cpu_{service}"
+        # 添加总CPU列
+        header += ",total_cpu\n"
+        f.write(header)
+
     tasks = []
 
     # 启动locust
@@ -164,8 +181,9 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             cpu_usage = {k: sum(v) / len(v) for k, v in gathered["cpu"].items()}
             vpa_manager.add_samples(cpu_usage, current_exp_time)
             # MAB决策阶段
-            latency = get_latest_latency()
-            print(f"当前延迟{latency}")
+            latency_data = get_latest_latency()  # 返回numpy列表 [rps, 90%, 95%, 98%, 99%, 99.9%]
+            print(f"当前延迟{latency_data}")
+
             if current_exp_time < 100:
                 print(f"预热阶段，{current_exp_time}/100")
             else:
@@ -173,10 +191,38 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                 # 配置更新阶段
                 update_start = time.time()
                 print(f"更新cpu配置....")
+
+                # 计算总CPU分配量
+                total_cpu = sum(new_allocate.values())
+
+                # 为了更新容器配置，仍需计算每个副本的配置
+                per_replica_allocation = {}
                 for service in new_allocate:
-                    new_allocate[service] /= service_replicas[service]
+                    per_replica_allocation[service] = new_allocate[service] / service_replicas[service]
+
+                # 将所有数据写入同一个CSV文件
+                with open(exp_data_csv_path, "a") as f:
+                    # 构建一行数据：开始是时间戳和延迟指标
+                    if len(latency_data) >= 6:  # 确保延迟数据完整
+                        line = f"{current_exp_time},{latency_data[0]},{latency_data[1]},{latency_data[2]},"
+                        line += f"{latency_data[3]},{latency_data[4]},{latency_data[5]}"
+                    else:
+                        # 如果延迟数据不完整，填充0
+                        line = f"{current_exp_time}," + ",".join(["0"] * 6)
+
+                    # 添加每个服务的总CPU分配（直接使用new_allocate中的值）
+                    for service in services:
+                        # 使用服务总分配量而不是每个副本的分配量
+                        allocation = new_allocate.get(service, 0)
+                        line += f",{allocation}"
+
+                    # 添加总CPU使用量
+                    line += f",{total_cpu}\n"
+                    f.write(line)
+
+                # 更新服务配置 - 这里仍然需要使用每个副本的分配值
                 for connection in connections.values():
-                    connection.send_command_sync(f"update{json.dumps(new_allocate)}")
+                    connection.send_command_sync(f"update{json.dumps(per_replica_allocation)}")
 
             total_time = time.time() - start_time
             print(f"总时间: {total_time:.3f}秒")
@@ -188,6 +234,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
 
             current_exp_time += 1
             if current_exp_time == exp_time:
+                print(f"实验数据已保存到 {exp_data_dir}/experiment_data.csv")
                 _, _ = execute_command(f"sudo kill {process.pid}")
                 break
 
