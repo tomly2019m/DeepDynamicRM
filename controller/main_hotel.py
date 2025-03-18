@@ -165,12 +165,16 @@ async def main(args):
             while not done:
                 start_time = time.time()
                 action = agent.select_action(state, latency, deterministic=False)
-
+                print(f"选择动作时间: {time.time() - start_time}")
                 # 执行动作
                 next_state, next_latency, reward, done = env.step(action)
+                print(f"执行动作时间: {time.time() - start_time}")
                 raw_latency = get_latest_latency()
+                print(f"获取延迟时间: {time.time() - start_time}")
                 print(f"action: {action}, reward: {reward}, latency: {raw_latency}")
                 agent.replay_buffer.add_experience(state, latency, action, reward, next_state, next_latency, done)
+
+                print(f"添加经验时间: {time.time() - start_time}")
 
                 state = next_state
                 latency = next_latency
@@ -196,6 +200,8 @@ async def main(args):
                     ]
                     writer.writerow(row)
 
+                print(f"记录step数据时间: {time.time() - start_time}")
+
                 # 转化为每replica的cpu分配
                 cpu_allocate = deepcopy(env.allocate_dict)
                 print(f"cpu_allocate: {cpu_allocate}")
@@ -204,11 +210,11 @@ async def main(args):
                     cpu_allocate[service] /= env.replica_dict[service]
                 for connection in connections.values():
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
-
+                print(f"更新cpu分配时间: {time.time() - start_time}")
                 if agent.replay_buffer.current_size > args.random_steps:
                     agent.train()
                     agent.exp_noise = schedualer.value(total_steps)  # e-greedy decay
-
+                print(f"训练时间: {time.time() - start_time}")
                 total_steps += 1
                 episode_step += 1
 

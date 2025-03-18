@@ -94,7 +94,7 @@ class Env:
         self.locust_pid_slaves = []
 
         # 预测器
-        self.predictor = DynamicSLOPredictor(service_mode="hier_attention")
+        self.predictor = DynamicSLOPredictor(service_mode="hier_attention").to("cuda")
         self._load_predictor()
 
         # 奖励参数
@@ -442,7 +442,9 @@ class Env:
         # 得到预测概率
         with torch.no_grad():
             # 获取预测结果
-            predictions = self.predictor(torch.FloatTensor(state_batch), torch.FloatTensor(latency_batch))
+            predictions = self.predictor(
+                torch.FloatTensor(state_batch).to("cuda"),
+                torch.FloatTensor(latency_batch).to("cuda"))
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
@@ -710,40 +712,81 @@ class Env:
             return False
 
     async def start_locust_eval(self, user_count, locust_file_name):
-        locust_cmd = [
-            "locust",  # 命令名称
-            "-f",  # 参数：指定locust文件路径
-            f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py",
-            "--host",  # 参数：目标主机
-            "http://127.0.0.1:8080",
-            "--users",  # 用户数参数
-            f"{user_count}",
-            "--csv",  # 输出CSV文件
-            f"{PROJECT_ROOT}/mylocust/locust_log",
-            "--headless",  # 无头模式
-            "-t",  # 测试时长
-            f"{10 * 2000}s",
-            "-r",
-            "10"  # 每秒启动10个用户
+        # 初始化PID存储
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
+
+        # Master节点命令
+        master_cmd = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py", "--host", "http://127.0.0.1:5000",
+            "--master", "--headless", "--users", f"{user_count}", "-r", "50", "-t", f"{10 * 2000}s", "--csv",
+            f"{PROJECT_ROOT}/mylocust/locust_log", "--expect-workers=8", "--master-bind-host=0.0.0.0"
         ]
 
-        print(f"locust command:{locust_cmd}")
+        # Worker基础命令
+        worker_cmd_base = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py", "--worker", "--master-host=127.0.0.1"
+        ]
 
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                # 启动Master节点
+                master_process = await asyncio.create_subprocess_exec(*master_cmd,
+                                                                      stdout=asyncio.subprocess.DEVNULL,
+                                                                      stderr=asyncio.subprocess.DEVNULL)
+                self.locust_pid_master = master_process.pid
+                print(f"Master已启动，PID: {self.locust_pid_master}")
+
+                # 启动8个Worker节点
+                worker_processes = []
+                for _ in range(8):
+                    wp = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                              stdout=asyncio.subprocess.DEVNULL,
+                                                              stderr=asyncio.subprocess.DEVNULL)
+                    worker_processes.append(wp)
+                    self.locust_pid_slaves.append(wp.pid)
+                    print(f"Worker已启动，PID: {wp.pid}")
+
+                # 验证进程状态
+                if await self._check_processes_alive():
+                    print("所有进程启动成功")
+                    return True
+                else:
+                    print("进程启动失败，正在清理...")
+                    await self._cleanup_processes()
+                    retry_count += 1
+
+            except Exception as e:
+                print(f"启动失败: {str(e)}")
+                await self._cleanup_processes()
+                retry_count += 1
+
+        print("达到最大重试次数后仍然失败")
+        return False
+
+    async def _cleanup_processes(self):
+        """清理所有Locust进程"""
         try:
-            # 创建子进程，不等待立即返回
-            process = await asyncio.create_subprocess_exec(
-                *locust_cmd,
-                stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
-                stderr=asyncio.subprocess.DEVNULL)
+            if self.locust_pid_master:
+                os.kill(self.locust_pid_master, signal.SIGTERM)
+                print(f"已终止Master进程 {self.locust_pid_master}")
 
-            print(f"Locust已启动，PID: {process.pid}")
+            for pid in self.locust_pid_slaves:
+                os.kill(pid, signal.SIGTERM)
+                print(f"已终止Worker进程 {pid}")
 
-            self.locust_pid = process.pid
+            # 重置PID列表
+            self.locust_pid_master = None
+            self.locust_pid_slaves = []
+
+            # 等待进程完全终止
+            await asyncio.sleep(2)
 
         except Exception as e:
-            # 捕获启动错误（如命令不存在、路径错误等）
-            print(f"启动Locust失败: {str(e)}")
-            raise
+            print(f"清理进程时出错: {str(e)}")
 
     def stop_locust(self):
         if self.locust_pid_master:
