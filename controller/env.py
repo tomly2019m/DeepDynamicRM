@@ -90,7 +90,7 @@ class Env:
         self.locust_pid = None
 
         # 预测器
-        self.predictor = DynamicSLOPredictor(service_mode="hier_attention")
+        self.predictor = DynamicSLOPredictor(service_mode="hier_attention").to("cuda")
         self._load_predictor()
 
         # 奖励参数
@@ -437,7 +437,7 @@ class Env:
         # 得到预测概率
         with torch.no_grad():
             # 获取预测结果
-            predictions = self.predictor(torch.FloatTensor(state_batch), torch.FloatTensor(latency_batch))
+            predictions = self.predictor(torch.FloatTensor(state_batch).to("cuda"), torch.FloatTensor(latency_batch).to("cuda"))
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率

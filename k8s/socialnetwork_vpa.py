@@ -19,7 +19,7 @@ from deploy.util.ssh import *
 from communication.sync import distribute_project
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_time", type=int, default=1500, help="experiment time")
+parser.add_argument("--exp_time", type=int, default=500, help="experiment time")
 parser.add_argument("--username", type=str, default="tomly", help="username for SSH connection")
 
 args = parser.parse_args()
@@ -132,7 +132,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
         print(f"启动Locust失败: {str(e)}")
         raise
 
-    vpa_manager = MultiServiceVPAManager(config_path=f"{PROJECT_ROOT}/config/service_config.json")
+    vpa_manager = MultiServiceVPAManager(config_path=f"{PROJECT_ROOT}/config/socialnetwork_config.json")
 
     # 等待负载稳定
     time.sleep(30)
