@@ -214,6 +214,9 @@ async def main(args):
                 total_steps += 1
                 episode_step += 1
 
+                if total_steps % 1000 == 0:
+                    agent.save(time_str, total_steps)
+
                 # 如果时间小于1秒，则等待
                 elapsed_time = time.time() - start_time
                 print(f"elapsed_time: {elapsed_time}")
