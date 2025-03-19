@@ -450,7 +450,7 @@ class Env:
             # 获取第五类的概率作为违例概率
             max_weight = sum(range(1, 7))  # 最大权重值
             for i in range(6):  # 假设有6类，索引从0到5
-                weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
+                weight = (i + 1) / max_weight  # 归一化权重
                 weighted_pv += probs[0, i].item() * weight
             pv = weighted_pv  # 使用归一化加权结果作为违例概率
         print(f"延迟概率分布：{probs}")
