@@ -441,7 +441,13 @@ class Env:
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
-            pv = probs[0, 5].item()  # 索引5对应第六类
+            # 采用加权方式计算违例概率
+            weighted_pv = 0
+            max_weight = sum(range(1, 7))  # 最大权重值
+            for i in range(6):  # 假设有6类，索引从0到5
+                weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
+                weighted_pv += probs[0, i].item() * weight
+            pv = weighted_pv  # 使用归一化加权结果作为违例概率
         print(f"延迟概率分布：{probs}")
         print(f"违例概率: {pv * 100:.2f}%")
         print(f"当前延迟: {latency}")

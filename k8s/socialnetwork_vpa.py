@@ -320,11 +320,7 @@ async def main():
                        "~/miniconda3/envs/DDRM/bin/python3 "
                        "deploy_benchmark.py")
             execute_command(command, stream_output=True)
-        if users >= 300:
-            exp_time = 1500
-        else:
-            exp_time = 500
-
+            
         for load_type in ["mixed"]:
             await start_experiment(connections, users, load_type)
 

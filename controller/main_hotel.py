@@ -232,6 +232,7 @@ async def main(args):
             with open(total_reward_path, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([episode_num, total_reward])
+            env.episode_count += 1
 
             print(f"总奖励: {total_reward}")
             episode_num += 1
