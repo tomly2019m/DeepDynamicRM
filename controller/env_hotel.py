@@ -68,7 +68,7 @@ class Env:
         # 最低分配数量
         self.min_allocate = 20
         self.constraint = None
-        self.scale_factor = 0.5
+        self.scale_factor = 0.9
         self.recover_episode = 30
         # 保存资源配置历史
         self.allocation_history = []
@@ -448,8 +448,9 @@ class Env:
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
-            max_weight = sum(range(1, 7))  # 最大权重值
-            for i in range(6):  # 假设有6类，索引从0到5
+            max_weight = 6  # 最大权重值
+            weighted_pv = 0.0
+            for i in range(4):  # 假设有4类，索引从0到3
                 weight = (i + 1) / max_weight  # 归一化权重
                 weighted_pv += probs[0, i].item() * weight
             pv = weighted_pv  # 使用归一化加权结果作为违例概率

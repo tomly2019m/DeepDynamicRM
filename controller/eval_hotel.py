@@ -51,9 +51,9 @@ def parse_args():
 
     # ================== 评估参数 ==================
     parser.add_argument('--model-path', type=str, default="./model/hotel", help='模型路径')
-    parser.add_argument('--model-step', type=int, default=59000, help='要加载的模型步数')
+    parser.add_argument('--model-step', type=int, default=72000, help='要加载的模型步数')
     parser.add_argument('--eval-episodes', type=int, default=3, help='评估的episode数量')
-    parser.add_argument('--eval-episode-steps', type=int, default=300, help='评估的episode步数')
+    parser.add_argument('--eval-episode-steps', type=int, default=600, help='评估的episode步数')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
@@ -90,7 +90,7 @@ async def main(args):
 
     # 加载训练好的模型
     model_dir = args.model_path
-    model_time = "20250312_065632"  # 从文件名提取的时间戳
+    model_time = "20250319_040040"  # 从文件名提取的时间戳
     model_step = args.model_step  # 72000
     print(f"加载模型: 时间戳 {model_time}, 步数 {model_step}")
     agent.load(model_time, model_step, model_dir)
@@ -364,10 +364,10 @@ def kill_slave():
 if __name__ == "__main__":
     # 启动slave节点
     args = parse_args()
-    kill_slave()
-    time.sleep(10)
-    setup_slave()
-    time.sleep(5)
+    # kill_slave()
+    # time.sleep(10)
+    # setup_slave()
+    # time.sleep(5)
     print("评估参数配置：")
     print(f"模型路径: {args.model_path}")
     print(f"模型步数: {args.model_step}")

@@ -466,7 +466,7 @@ class DynamicSLOPredictor(nn.Module):
             nn.Dropout(p=0.3),
             nn.Linear(256, 64),
             nn.GELU(),
-            nn.Linear(64, 4)  # 输出6个类别
+            nn.Linear(64, 4)  # 输出4个类别
         )
 
     def forward(self, service_data, latency_data):
