@@ -449,7 +449,7 @@ class SocialMediaUser(HttpUser):
         #     data=body, name="/compose_post")
 
         # TODO 修改为10
-        r = self.client.post(url, params=params, data=body, name='compose_post', timeout=1)
+        r = self.client.post(url, params=params, data=body, name='compose_post', timeout=10)
 
         if r.status_code > 202:
             logging.warning('compose_post resp.status = %d, text=%s' % (r.status_code, r.text))
@@ -469,7 +469,7 @@ class SocialMediaUser(HttpUser):
         # r = self.client.get(url, params=args,
         #     verify=False, name='/read_home_timeline')
 
-        r = self.client.get(url, params=args, name='read_home_line', timeout=1)
+        r = self.client.get(url, params=args, name='read_home_line', timeout=10)
 
         if r.status_code > 202:
             logging.warning('read_home_timeline resp.status = %d, text=%s' % (r.status_code, r.text))
@@ -489,7 +489,7 @@ class SocialMediaUser(HttpUser):
         # r = self.client.get(url, params=args,
         #     verify=False, name='/read_home_timeline')
 
-        r = self.client.get(url, params=args, name='read_user_timeline', timeout=1)
+        r = self.client.get(url, params=args, name='read_user_timeline', timeout=10)
 
         if r.status_code > 202:
             logging.warning('read_user_timeline resp.status = %d, text=%s' % (r.status_code, r.text))

@@ -8,3 +8,4 @@ predictor/model/
 **/model/
 *.pkl
 **/__pycache__/
+mylocust/src/__pycache__/

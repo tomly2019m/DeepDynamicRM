@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
 sys.path.append(f"{PROJECT_ROOT}/deploy")
 
-from k8s.k8s_vpa import MultiServiceVPAManager
+from k8s.quick_k8s_vpa import MultiServiceVPAManager
 from monitor.data_collector import *
 from mylocust.util.get_latency_data import get_latest_latency
 from deploy.util.ssh import *
@@ -83,7 +83,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
 
     # 创建实验数据保存目录
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    exp_data_dir = f"{PROJECT_ROOT}/k8s/exp_data/{time_str}_users{users}_{load_type}"
+    exp_data_dir = f"{PROJECT_ROOT}/k8s/exp_data/socialnetwork/{time_str}_users{users}_{load_type}_quick"
     os.makedirs(exp_data_dir, exist_ok=True)
 
     # 创建单个数据CSV文件并写入表头
@@ -119,7 +119,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
     print(f"locust command:{locust_cmd}")
 
     # 先执行初始配置
-    
+
     init_allocate = {}
     with open(f"{PROJECT_ROOT}/k8s/config/socialnetwork_config.json", "r") as f:
         config = json.load(f)
@@ -323,16 +323,6 @@ async def main():
         connection.send_command_sync("init")
 
     for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
-        # setup_slave()
-        # 等待slave监听进程启动完成
-        if users >= 300:
-            time.sleep(10)
-            #重置实验环境
-            command = ("cd ~/DeepDynamicRM/deploy && "
-                       "~/miniconda3/envs/DDRM/bin/python3 "
-                       "deploy_benchmark.py")
-            execute_command(command, stream_output=True)
-
         for load_type in ["mixed"]:
             await start_experiment(connections, users, load_type)
 
