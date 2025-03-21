@@ -407,6 +407,63 @@ class Env:
 
         return processed_serv, processed_lat  # 形状 (30, 28, 26), (30, 6)
 
+    def step_with_pv(self, action):
+        """执行一个环境步骤
+        
+        Args:
+            action: 要执行的动作索引
+            
+        Returns:
+            stacked_state: 当前状态 (30,28,26)
+            reward: 奖励值
+            done: 是否结束
+        """
+        # 1. 执行动作 会更新self.allocate_dict
+        print(f"执行动作: {action}, {self.actions[action]}")
+        self._execute_action(action)
+
+        # 2. 采集新数据
+        gathered, latency = self.gather_data()  #返回(28, 24) 和(6,)
+        self.buffer.append(gathered)
+        self.latency_buffer.append(latency)
+        self.config_buffer.append(self.convert_to_ndarray(deepcopy(self.allocate_dict)))
+
+        stacked_state, stacked_latency = self.get_state_and_latency()
+        result = (deepcopy(stacked_state), deepcopy(stacked_latency))
+        # 添加批次维度
+        state_batch = np.expand_dims(stacked_state, axis=0)  # shape (1,30,28,26)
+        latency_batch = np.expand_dims(stacked_latency, axis=0)  # shape (1,30,6)
+
+        # 得到预测概率
+        with torch.no_grad():
+            # 获取预测结果
+            predictions = self.predictor(
+                torch.FloatTensor(state_batch).to("cuda"),
+                torch.FloatTensor(latency_batch).to("cuda"))
+            # 应用softmax获取概率分布
+            probs = F.softmax(predictions, dim=1)
+            # 获取第五类的概率作为违例概率
+            # 采用加权方式计算违例概率
+            weighted_pv = 0
+            max_weight = 6  # 最大权重值
+            for i in range(6):  # 假设有6类，索引从0到5
+                weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
+                weighted_pv += probs[0, i].item() * weight
+            pv = weighted_pv  # 使用归一化加权结果作为违例概率
+        print(f"延迟概率分布：{probs}")
+        print(f"违例概率: {pv * 100:.2f}%")
+        print(f"当前延迟: {latency}")
+        p99_latency = latency[-2]
+        reward = self._calculate_reward(pv, p99_latency)
+
+        # 两阶段反馈
+        self.steps += 1
+        done = False
+        if self.steps < self.done_steps:
+            if self.steps % self.every_episode_steps == 0:
+                done = True
+        return result[0], result[1], reward, done, pv
+
     def step(self, action):
         """执行一个环境步骤
         
@@ -437,13 +494,15 @@ class Env:
         # 得到预测概率
         with torch.no_grad():
             # 获取预测结果
-            predictions = self.predictor(torch.FloatTensor(state_batch).to("cuda"), torch.FloatTensor(latency_batch).to("cuda"))
+            predictions = self.predictor(
+                torch.FloatTensor(state_batch).to("cuda"),
+                torch.FloatTensor(latency_batch).to("cuda"))
             # 应用softmax获取概率分布
             probs = F.softmax(predictions, dim=1)
             # 获取第五类的概率作为违例概率
             # 采用加权方式计算违例概率
             weighted_pv = 0
-            max_weight = sum(range(1, 7))  # 最大权重值
+            max_weight = 6  # 最大权重值
             for i in range(6):  # 假设有6类，索引从0到5
                 weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
                 weighted_pv += probs[0, i].item() * weight

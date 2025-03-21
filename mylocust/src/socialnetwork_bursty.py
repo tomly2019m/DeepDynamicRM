@@ -185,8 +185,8 @@ def compose_random_user():
 BURST_CONFIG = {
     "base_iat": 1.0,  # 基础请求间隔（秒）
     "burst_iat": 0.7,  # 突发期间请求间隔（秒）
-    "cycle_duration": 400,  # 完整周期时长（秒）
-    "burst_duration": 50,  # 每次突发持续时间（秒）
+    "cycle_duration": 500,  # 完整周期时长（秒）
+    "burst_duration": 100,  # 每次突发持续时间（秒）
     "min_interval": 150  # 两次突发最小间隔（秒）
 }
 
