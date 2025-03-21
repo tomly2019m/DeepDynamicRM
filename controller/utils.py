@@ -264,7 +264,7 @@ class ReplayBuffer:
 
     def __init__(
             self,
-            buffer_size: int = 100000,
+            buffer_size: int = 10000,
             service_shape: Tuple[int, int, int] = (30, 28, 26),  # (时间步, 服务数, 特征)
             latency_shape: Tuple[int, int] = (30, 6),  # (时间步, 延迟指标)
             num_actions: int = 8,

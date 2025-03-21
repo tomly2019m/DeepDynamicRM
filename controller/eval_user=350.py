@@ -51,9 +51,9 @@ def parse_args():
 
     # ================== 评估参数 ==================
     parser.add_argument('--model-path', type=str, default="./model/socialnetwork", help='模型路径')
-    parser.add_argument('--model-step', type=int, default=72000, help='要加载的模型步数')
+    parser.add_argument('--model-step', type=int, default=47000, help='要加载的模型步数')
     parser.add_argument('--eval-episodes', type=int, default=1, help='评估的episode数量')
-    parser.add_argument('--eval-episode-steps', type=int, default=500, help='评估的episode步数')
+    parser.add_argument('--eval-episode-steps', type=int, default=1000, help='评估的episode步数')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
@@ -61,7 +61,7 @@ def parse_args():
                         type=str,
                         default="socialnetwork_rand",
                         help='locustfile名称 (默认: socialnetwork)')
-    parser.add_argument('--user_count', type=int, default=300, help='用户数量 (默认: 300)')
+    parser.add_argument('--user_count', type=int, default=350, help='用户数量 (默认: 350)')
 
     return parser.parse_args()
 
@@ -81,7 +81,7 @@ async def main(args):
     # 初始化环境，创建slave连接
     env = Env()
     # 重置实验环境
-    env.reset_benchmark()
+    # env.reset_benchmark()
     await env.create_connections()
     connections = env.connections
 
@@ -95,6 +95,7 @@ async def main(args):
     model_step = args.model_step  # 72000
     print(f"加载模型: 时间戳 {model_time}, 步数 {model_step}")
     agent.load(model_time, model_step, model_dir)
+    agent.actor.eval()
     print("模型加载成功！")
 
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -133,7 +134,7 @@ async def main(args):
             with open(step_csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 # 构建表头：公共字段 + 服务字段
-                header = ['step', 'action', 'reward', 'total_cpu', 'rps', 'pv', '90%', '95%', '98%', '99%', '99.9%'] + \
+                header = ['step', 'action', 'reward', 'total_cpu', 'pv', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
                         [f'{s}_cpu' for s in services]
                 writer.writerow(header)
 
@@ -176,7 +177,6 @@ async def main(args):
                         action,
                         reward,
                         total_cpu,
-                        env.rps,  # 当前的RPS值
                         pv,  # 添加PV数据
                         *raw_latency,  # 展开延迟特征
                         *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配

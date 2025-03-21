@@ -1,3 +1,4 @@
+import math
 import random
 from locust import HttpUser, task, tag
 import os
@@ -158,57 +159,24 @@ def compose_random_user():
     return str(user)
 
 
-from scipy.stats import truncnorm
-
-NOISE_CONFIG = {
-    "base_iat": 1,  # 基础请求间隔（秒）
-    "noise_type": "composite",  # 可选：gaussian, poisson, composite
-    "gaussian": {
-        "mu": 0.0,  # 均值
-        "sigma": 0.3,  # 标准差
-        "clip": (-0.4, 0.4)  # 截断范围
-    },
-    "impulse": {
-        "prob": 0.02,  # 脉冲事件概率
-        "multiplier": 5  # 脉冲强度
-    },
-    "random_walk": {
-        "step_size": 0.1,  # 随机游走步长
-        "persistence": 0.8  # 趋势保持系数
-    }
-}
-
-log_path = f'/home/tomly/DeepDynamicRM/mylocust/logs/logs.log'
+mean_iat = 1  # seconds
 
 
 class SocialMediaUser(HttpUser):
-    # Target RPS configuration
-    MIN_RPS = 270
-    MAX_RPS = 320
+    # 添加实例变量记录启动时间
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_time = self.environment.runner.stats.start_time if self.environment.runner else time.time()
 
+    # 修改后的wait_time方法
     def wait_time(self):
-        """
-        Calculate a random wait time to achieve an RPS between MIN_RPS and MAX_RPS.
-        
-        The formula is: wait_time = 1 / (RPS / num_users)
-        For completely random RPS between target range, we randomly select a target RPS
-        within our range for each request.
-        """
-        # Randomly select a target RPS within our desired range
-        target_rps = random.uniform(self.MIN_RPS, self.MAX_RPS)
+        # 计算已运行时间（秒）
+        elapsed = time.time() - self.start_time
+        # 正弦波公式：0.2*sin(2πt/50) + 1.05
+        # 保证值在0.85-1.25之间，周期50秒
+        wait = 0.2 * math.sin(2 * math.pi * elapsed / 50) + 1.05
+        return max(min(wait, 1.25), 0.85)  # 确保在范围内
 
-        # Calculate wait time based on current user count and target RPS
-        # If no users are running yet, default to a reasonable wait time
-        user_count = 300
-        if user_count == 0:
-            # Default to a reasonable wait time if no users are running yet
-            return random.uniform(0.05, 0.2)
-
-        # Calculate wait time to achieve target RPS with current user count
-        wait_time = 1 / (target_rps / user_count)
-
-        # Ensure minimum wait time for stability
-        return max(0.05, wait_time)
 
     @task(5)
     @tag('compose_post')
@@ -281,9 +249,6 @@ class SocialMediaUser(HttpUser):
 
         if r.status_code > 202:
             logging.warning('compose_post resp.status = %d, text=%s' % (r.status_code, r.text))
-            with open(log_path, 'a') as f:
-                f.write('compose_post resp.status = %d, text=%s' % (r.status_code, r.text))
-                f.write(f"Request Body: {body} \n")
 
     @task(80)
     @tag('read_home_timeline')

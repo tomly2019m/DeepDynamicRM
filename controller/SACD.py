@@ -17,7 +17,7 @@ class SACD_agent:
         self.H_mean = 0
         self.replay_buffer = ReplayBuffer(service_shape=(self.time_steps, self.service_num, self.service_feat_dim),
                                           latency_shape=(self.time_steps, self.latency_feat_dim),
-                                          buffer_size=int(1e6),
+                                          buffer_size=int(1e5),
                                           num_actions=self.action_dim)
 
         self.actor = Policy_Net(num_actions=self.action_dim,
