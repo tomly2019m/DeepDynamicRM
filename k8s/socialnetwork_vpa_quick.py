@@ -7,6 +7,7 @@ import time
 import asyncio
 from typing import Dict, Tuple
 import paramiko
+import psutil  # 新增导入
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -33,6 +34,7 @@ service_replicas = {}
 latency_list = []
 cpu_config_list = []
 services = []
+locust_process = []
 
 with open(f"{PROJECT_ROOT}/deploy/config/socialnetwork.json", 'r') as f:
     config = json.load(f)
@@ -79,7 +81,7 @@ class SlaveConnection:
 
 
 async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], users: int, load_type: str):
-    global exp_time, gathered_list, replicas, service_replicas, cpu_config_list
+    global exp_time, gathered_list, replicas, service_replicas, cpu_config_list, locust_process
 
     # 创建实验数据保存目录
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
@@ -99,24 +101,88 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
         f.write(header)
 
     tasks = []
+    pids = []
 
-    # 启动locust
-    locust_cmd = [
-        "locust",  # 命令名称
-        "-f",  # 参数：指定locust文件路径
-        f"{PROJECT_ROOT}/mylocust/src/socialnetwork_{load_type}.py",  # 你的Locust文件路径
-        "--host",  # 参数：目标主机
+    # 启动master节点
+    master_cmd = [
+        "locust",
+        "-f",
+        f"{PROJECT_ROOT}/mylocust/src/socialnetwork_{load_type}.py",
+        "--host",
         "http://127.0.0.1:8080",
-        "--users",  # 用户数参数
+        "--master",
+        "--headless",
+        "--users",
         f"{users}",
-        "--csv",  # 输出CSV文件
-        f"{PROJECT_ROOT}/mylocust/locust_log",
-        "--headless",  # 无头模式
-        "-t",  # 测试时长
+        "-r",
+        "5",  # 启动速率参数
+        "-t",
         f"{3 * exp_time}s",
+        "--csv",
+        f"{PROJECT_ROOT}/mylocust/locust_log",
+        "--expect-workers=3",
+        "--master-bind-host=0.0.0.0"
     ]
 
-    print(f"locust command:{locust_cmd}")
+    print(f"Master command: {' '.join(master_cmd)}")
+
+    # 启动worker节点的基本命令
+    worker_cmd_base = [
+        "locust",
+        "-f",
+        f"{PROJECT_ROOT}/mylocust/src/socialnetwork_{load_type}.py",
+        "--host",
+        "http://127.0.0.1:8080",
+        "--worker",
+        "--master-host=127.0.0.1"  # 假设master在本地运行
+    ]
+
+    while True:
+        try:
+            # 启动master进程
+            master_process = await asyncio.create_subprocess_exec(*master_cmd,
+                                                                  stdout=asyncio.subprocess.DEVNULL,
+                                                                  stderr=asyncio.subprocess.DEVNULL)
+            print(f"Locust master已启动，PID: {master_process.pid}")
+            pids.append(master_process.pid)
+
+            # 启动3个worker进程
+            worker_processes = []
+            for i in range(3):
+                worker_process = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                                      stdout=asyncio.subprocess.DEVNULL,
+                                                                      stderr=asyncio.subprocess.DEVNULL)
+                worker_processes.append(worker_process)
+                print(f"Worker {i}已启动，PID: {worker_process.pid}")
+
+            # 将进程对象保存在全局变量中以便后续管理
+            locust_process = [master_process] + worker_processes
+            pids.extend([worker_process.pid for worker_process in worker_processes])
+
+            # 检查pids列表中的进程是否存在
+            check_pids = True
+            for pid in pids:
+                if not psutil.pid_exists(pid):
+                    print(f"进程{pid}不存在")
+                    check_pids = False
+                    break
+            if check_pids:
+                break
+            else:
+                for pid in pids:
+                    print(f"清理进程{pid}")
+                    _, _ = execute_command(f"sudo kill {pid}")
+                time.sleep(5)
+                print(f"等待5秒后重新启动")
+        except Exception as e:
+            # 捕获启动错误（如命令不存在、路径错误等）
+            print(f"启动Locust失败: {str(e)}")
+            # 清理已启动的进程
+            if 'master_process' in locals():
+                master_process.terminate()
+            for wp in worker_processes:
+                wp.terminate()
+            raise
 
     # 先执行初始配置
 
@@ -130,26 +196,10 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
         connection.send_command_sync(f"update{json.dumps(init_allocate)}")
 
     try:
-        # 创建子进程，不等待立即返回
-        process = await asyncio.create_subprocess_exec(
-            *locust_cmd,
-            stdout=asyncio.subprocess.DEVNULL,  # 丢弃输出
-            stderr=asyncio.subprocess.DEVNULL)
+        # 等待负载稳定
+        time.sleep(30)
 
-        print(f"Locust已启动，PID: {process.pid}")
-
-    except Exception as e:
-        # 捕获启动错误（如命令不存在、路径错误等）
-        print(f"启动Locust失败: {str(e)}")
-        raise
-
-    vpa_manager = MultiServiceVPAManager(config_path=f"{PROJECT_ROOT}/k8s/config/socialnetwork_config.json")
-
-    # 等待负载稳定
-    time.sleep(30)
-
-    current_exp_time = 0
-    try:
+        current_exp_time = 0
         while True:
             # 数据采集阶段
             collect_start = time.time()
@@ -191,6 +241,7 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             # 获取每个服务总cpu使用率
             cpu_usage = {k: sum(v) for k, v in gathered["cpu"].items()}
             print(cpu_usage)
+            vpa_manager = MultiServiceVPAManager(config_path=f"{PROJECT_ROOT}/k8s/config/socialnetwork_config.json")
             vpa_manager.add_samples(cpu_usage, current_exp_time)
             # MAB决策阶段
             latency_data = get_latest_latency()  # 返回numpy列表 [rps, 90%, 95%, 98%, 99%, 99.9%]
@@ -200,6 +251,8 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
                 print(f"预热阶段，{current_exp_time}/100")
             else:
                 new_allocate = vpa_manager.get_recommendations()
+                if latency_data[-2] > 500:
+                    new_allocate = deepcopy(init_allocate)
                 print(f"new_allocate: {new_allocate}")
                 # 配置更新阶段
                 update_start = time.time()
@@ -248,12 +301,15 @@ async def start_experiment(connections: Dict[Tuple[str, int], SlaveConnection], 
             current_exp_time += 1
             if current_exp_time == exp_time:
                 print(f"实验数据已保存到 {exp_data_dir}/experiment_data.csv")
-                _, _ = execute_command(f"sudo kill {process.pid}")
+                for pid in pids:
+                    _, _ = execute_command(f"sudo kill {pid}")
+                    time.sleep(1)
                 break
 
     finally:
         # 清理locust进程
-        _, _ = execute_command(f"sudo kill {process.pid}")
+        for pid in pids:
+            _, _ = execute_command(f"sudo kill {pid}")
 
 
 # 配置好slave，在slave上启动监听
@@ -322,8 +378,8 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
-        for load_type in ["mixed"]:
+    for users in [400, 450]:
+        for load_type in ["bursty"]:
             await start_experiment(connections, users, load_type)
 
     for connection in connections.values():

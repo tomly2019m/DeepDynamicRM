@@ -12,7 +12,7 @@ class VPACPURecommender:
         min_allowed: float,
         max_allowed: float,
         target_percentile: float = 1.00,
-        margin: float = 1.5,
+        margin: float = 0.1,
         window_size: int = 30,  # 调整为100秒窗口（每秒1个样本）
         decay_factor: float = 0.99,
     ):
