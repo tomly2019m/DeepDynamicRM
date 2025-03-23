@@ -98,157 +98,186 @@ async def main(args):
     print("模型加载成功！")
 
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    eval_data_path = f"./eval_data/{time_str}/"
-    if not os.path.exists(eval_data_path):
-        os.makedirs(eval_data_path)
+    base_eval_data_path = f"./eval_data/{time_str}/"
+    if not os.path.exists(base_eval_data_path):
+        os.makedirs(base_eval_data_path)
 
-    # 创建评估结果文件
-    eval_results_path = os.path.join(eval_data_path, "eval_results.csv")
-    with open(eval_results_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['episode', 'total_reward', 'avg_latency_90', 'avg_latency_95', 'avg_latency_99'])
+    # 用户数量范围：从50到450，步长为50
+    user_counts = list(range(50, 451, 50))
 
-    try:
-        all_total_rewards = []
-        all_latency_metrics = {'90%': [], '95%': [], '98%': [], '99%': [], '99.9%': []}
+    for user_count in user_counts:
+        print(f"\n========== 开始评估用户数量: {user_count} ==========")
 
-        for episode_num in range(args.eval_episodes):
-            # 先执行初始化分配
-            cpu_allocate = deepcopy(env.initial_allocation)
-            for service in cpu_allocate:
-                cpu_allocate[service] /= env.replica_dict[service]
-            for connection in connections.values():
-                connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
+        # 为当前用户数量创建专用文件夹
+        eval_data_path = os.path.join(base_eval_data_path, f"user={user_count}")
+        if not os.path.exists(eval_data_path):
+            os.makedirs(eval_data_path)
 
-            # 重置环境
-            state, latency = await env.reset_eval(args.user_count, args.locustfile_name)
-            done = False
+        # 创建评估结果文件
+        eval_results_path = os.path.join(eval_data_path, "eval_results.csv")
+        with open(eval_results_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['episode', 'total_reward', 'avg_latency_90', 'avg_latency_95', 'avg_latency_99'])
 
-            services = list(env.allocate_dict.keys())
-            episode_dir = os.path.join(eval_data_path, f"episode{episode_num:03d}")
-            os.makedirs(episode_dir, exist_ok=True)
+        try:
+            all_total_rewards = []
+            all_latency_metrics = {'90%': [], '95%': [], '98%': [], '99%': [], '99.9%': []}
 
-            # 初始化step记录文件
-            step_csv_path = os.path.join(episode_dir, "step_data.csv")
-            with open(step_csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                # 构建表头：公共字段 + 服务字段
-                header = ['step', 'action', 'reward', 'total_cpu', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
-                        [f'{s}_cpu' for s in services]
-                writer.writerow(header)
-
-            episode_step = 0
-            total_reward = 0
-            episode_latencies = {'90%': [], '95%': [], '98%': [], '99%': [], '99.9%': []}
-
-            while not done:
-                start_time = time.time()
-                action = agent.select_action(state, latency, deterministic=False)
-
-                # 执行动作
-                next_state, next_latency, reward, done = env.step(action)
-                raw_latency = get_latest_latency()
-
-                # 记录性能指标
-                for i, percentile in enumerate(['90%', '95%', '98%', '99%', '99.9%']):
-                    episode_latencies[percentile].append(raw_latency[i])
-
-                print(
-                    f"Episode {episode_num+1}, Step {episode_step}, Action: {action}, Reward: {reward}, Latency: {raw_latency}"
-                )
-
-                state = next_state
-                latency = next_latency
-                if np.isnan(reward):
-                    print(f"reward is nan, skip this step")
-                    continue
-
-                total_reward += reward
-
-                original_cpu_allocate = deepcopy(env.allocate_dict)
-                total_cpu = sum(original_cpu_allocate.values())
-
-                # 记录step数据
-                with open(step_csv_path, 'a', newline='') as f:
-                    writer = csv.writer(f)
-                    row = [
-                        episode_step,
-                        action,
-                        reward,
-                        total_cpu,
-                        *raw_latency,  # 展开延迟特征
-                        *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
-                    ]
-                    writer.writerow(row)
-
-                # 转化为每replica的cpu分配
-                cpu_allocate = deepcopy(env.allocate_dict)
-                print(f"cpu_allocate: {cpu_allocate}")
-                print(f"总cpu分配: {sum(cpu_allocate.values())}")
+            for episode_num in range(args.eval_episodes):
+                # 先执行初始化分配
+                cpu_allocate = deepcopy(env.initial_allocation)
                 for service in cpu_allocate:
                     cpu_allocate[service] /= env.replica_dict[service]
                 for connection in connections.values():
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
 
-                episode_step += 1
+                # 重置环境 - 使用当前循环的user_count而不是args.user_count
+                state, latency = await env.reset_eval(user_count, args.locustfile_name)
+                done = False
 
-                # 每个episode评估500步
-                if episode_step == args.eval_episode_steps:
-                    break
+                services = list(env.allocate_dict.keys())
+                episode_dir = os.path.join(eval_data_path, f"episode{episode_num:03d}")
+                os.makedirs(episode_dir, exist_ok=True)
 
-                # 如果时间小于1秒，则等待
-                elapsed_time = time.time() - start_time
-                print(f"elapsed_time: {elapsed_time}")
-                if elapsed_time < 1:
-                    await asyncio.sleep(1 - elapsed_time)
-                else:
-                    pass
+                # 初始化step记录文件
+                step_csv_path = os.path.join(episode_dir, "step_data.csv")
+                with open(step_csv_path, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    # 构建表头：公共字段 + 服务字段
+                    header = ['step', 'action', 'reward', 'total_cpu', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
+                            [f'{s}_cpu' for s in services]
+                    writer.writerow(header)
 
-            # 计算每个episode的平均延迟指标
-            avg_latencies = {k: np.mean(v) for k, v in episode_latencies.items()}
+                episode_step = 0
+                total_reward = 0
+                episode_latencies = {'90%': [], '95%': [], '98%': [], '99%': [], '99.9%': []}
 
-            # 记录评估结果
-            with open(eval_results_path, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(
-                    [episode_num, total_reward, avg_latencies['90%'], avg_latencies['95%'], avg_latencies['99%']])
+                while not done:
+                    start_time = time.time()
+                    action = agent.select_action(state, latency, deterministic=False)
 
-            # 收集统计数据
-            all_total_rewards.append(total_reward)
-            for k, v in avg_latencies.items():
-                all_latency_metrics[k].append(v)
+                    # 执行动作
+                    next_state, next_latency, reward, done = env.step(action)
+                    raw_latency = get_latest_latency()
 
-            print(f"Episode {episode_num+1} 完成, 总奖励: {total_reward}")
-            print(f"平均延迟指标: {avg_latencies}")
+                    # 记录性能指标
+                    for i, percentile in enumerate(['90%', '95%', '98%', '99%', '99.9%']):
+                        episode_latencies[percentile].append(raw_latency[i])
 
-        # 输出总体评估结果
-        print("\n========== 评估结果汇总 ==========")
-        print(f"平均总奖励: {np.mean(all_total_rewards):.4f} ± {np.std(all_total_rewards):.4f}")
-        for k, v in all_latency_metrics.items():
-            print(f"平均{k}延迟: {np.mean(v):.4f} ± {np.std(v):.4f}ms")
+                    print(
+                        f"Episode {episode_num+1}, Step {episode_step}, Action: {action}, Reward: {reward}, Latency: {raw_latency}"
+                    )
 
-        # 保存总体评估结果
-        summary_path = os.path.join(eval_data_path, "eval_summary.json")
-        summary = {
+                    state = next_state
+                    latency = next_latency
+                    if np.isnan(reward):
+                        print(f"reward is nan, skip this step")
+                        continue
+
+                    total_reward += reward
+
+                    original_cpu_allocate = deepcopy(env.allocate_dict)
+                    total_cpu = sum(original_cpu_allocate.values())
+
+                    # 记录step数据
+                    with open(step_csv_path, 'a', newline='') as f:
+                        writer = csv.writer(f)
+                        row = [
+                            episode_step,
+                            action,
+                            reward,
+                            total_cpu,
+                            *raw_latency,  # 展开延迟特征
+                            *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
+                        ]
+                        writer.writerow(row)
+
+                    # 转化为每replica的cpu分配
+                    cpu_allocate = deepcopy(env.allocate_dict)
+                    print(f"cpu_allocate: {cpu_allocate}")
+                    print(f"总cpu分配: {sum(cpu_allocate.values())}")
+                    for service in cpu_allocate:
+                        cpu_allocate[service] /= env.replica_dict[service]
+                    for connection in connections.values():
+                        connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
+
+                    episode_step += 1
+
+                    # 每个episode评估指定步数
+                    if episode_step == args.eval_episode_steps:
+                        break
+
+                    # 如果时间小于1秒，则等待
+                    elapsed_time = time.time() - start_time
+                    print(f"elapsed_time: {elapsed_time}")
+                    if elapsed_time < 1:
+                        await asyncio.sleep(1 - elapsed_time)
+                    else:
+                        pass
+
+                # 计算每个episode的平均延迟指标
+                avg_latencies = {k: np.mean(v) for k, v in episode_latencies.items()}
+
+                # 记录评估结果
+                with open(eval_results_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                        [episode_num, total_reward, avg_latencies['90%'], avg_latencies['95%'], avg_latencies['99%']])
+
+                # 收集统计数据
+                all_total_rewards.append(total_reward)
+                for k, v in avg_latencies.items():
+                    all_latency_metrics[k].append(v)
+
+                print(f"Episode {episode_num+1} 完成, 总奖励: {total_reward}")
+                print(f"平均延迟指标: {avg_latencies}")
+
+            # 输出当前用户数量的总体评估结果
+            print(f"\n========== 用户数量 {user_count} 评估结果汇总 ==========")
+            print(f"平均总奖励: {np.mean(all_total_rewards):.4f} ± {np.std(all_total_rewards):.4f}")
+            for k, v in all_latency_metrics.items():
+                print(f"平均{k}延迟: {np.mean(v):.4f} ± {np.std(v):.4f}ms")
+
+            # 保存当前用户数量的总体评估结果
+            summary_path = os.path.join(eval_data_path, "eval_summary.json")
+            summary = {
+                "model_path": args.model_path,
+                "model_step": args.model_step,
+                "episodes": args.eval_episodes,
+                "user_count": user_count,  # 添加用户数量信息
+                "avg_reward": float(np.mean(all_total_rewards)),
+                "std_reward": float(np.std(all_total_rewards)),
+                "latency_metrics": {
+                    k: {
+                        "mean": float(np.mean(v)),
+                        "std": float(np.std(v))
+                    }
+                    for k, v in all_latency_metrics.items()
+                }
+            }
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=4)
+
+            print(f"用户数量 {user_count} 的评估结果已保存至 {eval_data_path}")
+            env.stop_locust()
+
+        except Exception as e:
+            print(f"用户数量 {user_count} 的评估出错: {e}")
+            env.stop_locust()
+            # 继续下一个用户数量的评估，而不是完全退出
+            continue
+
+    try:
+        # 创建所有用户数量的汇总文件
+        overall_summary_path = os.path.join(base_eval_data_path, "overall_summary.json")
+        overall_summary = {
             "model_path": args.model_path,
             "model_step": args.model_step,
-            "episodes": args.eval_episodes,
-            "avg_reward": float(np.mean(all_total_rewards)),
-            "std_reward": float(np.std(all_total_rewards)),
-            "latency_metrics": {
-                k: {
-                    "mean": float(np.mean(v)),
-                    "std": float(np.std(v))
-                }
-                for k, v in all_latency_metrics.items()
-            }
+            "user_counts": user_counts,
+            "time": time_str
         }
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=4)
-
-        print(f"评估结果已保存至 {eval_data_path}")
-        env.stop_locust()
-        kill_slave()
+        with open(overall_summary_path, 'w') as f:
+            json.dump(overall_summary, f, indent=4)
 
     except Exception as e:
         raise e
@@ -338,10 +367,10 @@ def kill_slave():
 if __name__ == "__main__":
     # 启动slave节点
     args = parse_args()
-    kill_slave()
-    time.sleep(10)
-    setup_slave()
-    time.sleep(5)
+    # kill_slave()
+    # time.sleep(10)
+    # setup_slave()
+    # time.sleep(5)
     print("评估参数配置：")
     print(f"模型路径: {args.model_path}")
     print(f"模型步数: {args.model_step}")

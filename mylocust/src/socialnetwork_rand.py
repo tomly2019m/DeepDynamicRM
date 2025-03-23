@@ -254,7 +254,7 @@ class SocialMediaUser(HttpUser):
     @tag('read_home_timeline')
     def read_home_timeline(self):
         start = random.randint(0, 100)
-        stop = start + 10
+        stop = start + 1
 
         url = '/wrk2-api/home-timeline/read'
         args = {}

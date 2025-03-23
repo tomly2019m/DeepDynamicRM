@@ -66,6 +66,7 @@ class Env:
         self._load_actions()
         # 最低分配数量
         self.min_allocate = 60
+        self.non_scalable_service_min = 0.2
         self.constraint = None
         # 保存资源配置历史
         self.allocation_history = []
@@ -74,6 +75,7 @@ class Env:
         # 保存从部署配置文件中读取默认服务配置
         self.default_cpu_config: dict[str, dict[str, float]] = {}
         self.services = []
+        self.scalable_service = []
 
         self.allocate_dict: dict[str, float] = {}  # 每个服务总的cpu分配
         self.replica_dict: dict[str, int] = {}
@@ -526,7 +528,10 @@ class Env:
         action_type = self.actions[action]["type"]
         action_value = self.actions[action]["value"]
 
-        self.min_perrep = self.min_allocate / sum(self.replica_dict.values())
+        # 计算可扩展服务的副本总数
+        total_replicas = sum(self.replica_dict[service] for service in self.scalable_service)
+        # 计算每个副本的最小分配量
+        self.min_perrep = self.min_allocate / total_replicas
 
         # 保存当前状态到历史记录（用于recover）
         self.allocation_history.append(deepcopy(self.allocate_dict))
@@ -534,7 +539,7 @@ class Env:
             self.allocation_history.pop(0)
 
         load = {}
-        for service in self.allocate_dict:
+        for service in self.scalable_service:
             mean_util = self.cpu_state[service][2]  # 获取平均利用率
             load[service] = (mean_util * 100) / self.allocate_dict[service]
 
@@ -617,6 +622,11 @@ class Env:
         for service in new_allocation:
             if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
                 new_allocation[service] = self.min_perrep * self.replica_dict[service]
+
+        # 非可扩展服务最小资源保护
+        for service in self.services:
+            if service not in self.scalable_service:
+                new_allocation[service] = self.non_scalable_service_min * self.replica_dict[service]
 
         # 如果总资源上限，则恢复到初始配置
         if sum(new_allocation.values()) > self.max_cpu:

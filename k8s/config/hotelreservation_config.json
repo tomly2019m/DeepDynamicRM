@@ -1,0 +1,70 @@
+{
+    "frontend": {
+        "min_allowed": 0.2,
+        "max_allowed": 48
+    },
+    "geo": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    },
+    "memcached-profile": {
+        "min_allowed": 0.2,
+        "max_allowed": 8
+    },
+    "memcached-rate": {
+        "min_allowed": 0.2,
+        "max_allowed": 8
+    },
+    "memcached-reserve": {
+        "min_allowed": 0.2,
+        "max_allowed": 8
+    },
+    "mongodb-geo": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "mongodb-profile": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "mongodb-rate": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "mongodb-recommendation": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "mongodb-reservation": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "mongodb-user": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "profile": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    },
+    "rate": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    },
+    "recommendation": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    },
+    "reservation": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    },
+    "search": {
+        "min_allowed": 0.2,
+        "max_allowed": 32
+    },
+    "user": {
+        "min_allowed": 0.2,
+        "max_allowed": 16
+    }
+}

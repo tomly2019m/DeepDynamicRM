@@ -38,7 +38,7 @@ def get_user():
 mean_iat = 1
 
 # 突发负载配置
-BURST_CONFIG = {"base_iat": 1.3, "burst_iat": 0.9, "cycle_duration": 250, "burst_duration": 50, "min_interval": 150}
+BURST_CONFIG = {"base_iat": 1, "burst_iat": 0.7, "cycle_duration": 400, "burst_duration": 100, "min_interval": 150}
 
 
 class SocialMediaUser(HttpUser):
