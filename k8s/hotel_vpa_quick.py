@@ -409,34 +409,5 @@ async def main():
         connection.close()
 
 
-def test_setup_slave():
-    # setup_slave()
-    print("🔧 开始测试slave节点配置...")
-
-    # 从配置文件中读取主机名和端口
-    with open("./comm.json", "r") as f:
-        comm_config = json.load(f)
-    hosts = comm_config["slaves"]
-    port = comm_config["port"]
-
-    # 测试每个slave节点的连通性
-    for host in hosts:
-        try:
-            # 创建socket连接测试
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(5)  # 设置超时时间为5秒
-                result = s.connect_ex((host, port))
-
-                if result == 0:
-                    print(f"✅ {host}:{port} 连接成功")
-                else:
-                    print(f"❌ {host}:{port} 连接失败")
-
-        except Exception as e:
-            print(f"⚠️ 测试 {host} 时发生错误: {str(e)}")
-
-    print("🔍 slave节点配置测试完成")
-
-
 if __name__ == "__main__":
     asyncio.run(main())

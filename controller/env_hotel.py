@@ -54,6 +54,7 @@ class Env:
         self.buffer = deque(maxlen=self.window_size)
         self.latency_buffer = deque(maxlen=self.window_size)
         self.config_buffer = deque(maxlen=self.window_size)
+        self.usage_buffer = deque(maxlen=self.window_size)
 
         # 在预测器训练时，得到的归一化器
         self.scalers = []
@@ -70,6 +71,7 @@ class Env:
         self.constraint = None
         self.scale_factor = 0.9
         self.recover_episode = 30
+        self.non_scalable_service_min = 0.2
         # 保存资源配置历史
         self.allocation_history = []
         self.history_length = 10
@@ -332,6 +334,11 @@ class Env:
         for k, v in gathered["cpu"].items():
             gathered["cpu"][k] = [item / 1e6 for item in v]
         self.cpu_state = gathered["cpu"]
+
+        cpu_usage = {k: sum(v) for k, v in gathered["cpu"].items()}
+        print(f"CPU使用情况: {cpu_usage}")
+        self.usage_buffer.append(cpu_usage)
+
         latency = get_latest_latency()
         gathered["cpu"] = process_data(gathered["cpu"])
         gathered["memory"] = process_data(gathered["memory"])
@@ -473,13 +480,12 @@ class Env:
         action_type = self.actions[action]["type"]
         action_value = self.actions[action]["value"]
 
-        self.min_perrep = self.min_allocate / sum(self.replica_dict.values())
-
         # 保存当前状态到历史记录（用于recover）
         self.allocation_history.append(deepcopy(self.allocate_dict))
         if len(self.allocation_history) > 10:  # 保留最近10次记录
             self.allocation_history.pop(0)
 
+        # 计算各服务的负载情况
         load = {}
         for service in self.allocate_dict:
             mean_util = self.cpu_state[service][2]  # 获取平均利用率
@@ -496,57 +502,52 @@ class Env:
 
         elif action_type == "decrease":
             # 找到负载最低的服务减少资源
-            # 过滤掉 allocate 值为 self.min_perrep 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+                max([usage.get(service, 0) for usage in self.usage_buffer]) * 1.2 * self.replica_dict[service] > 1e-4
             ]
             if len(candidates) > 0:
                 target_service = min(candidates, key=lambda k: load[k])
-                new_allocation[target_service] = max(
-                    self.min_perrep * self.replica_dict[target_service],  # 保持最小分配量
-                    new_allocation[target_service] - action_value,
-                )
+                min_alloc = max([usage.get(target_service, 0)
+                                 for usage in self.usage_buffer]) * 1.2 * self.replica_dict[target_service]
+                new_allocation[target_service] = max(min_alloc, new_allocation[target_service] - action_value)
 
         elif action_type == "increase_batch":
-            # 增加前所有可调服务的CPU配额
+            # 增加所有可调服务的CPU配额
             candidates = self.scalable_service
             for service in candidates:
-                new_allocation[service] = min(
-                    self.default_cpu_config[service]["max_cpus"],
-                    new_allocation[service] + action_value,
-                )
+                new_allocation[service] = min(self.default_cpu_config[service]["max_cpus"],
+                                              new_allocation[service] + action_value)
 
         elif action_type == "decrease_batch":
+            # 批量减少低负载服务资源
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+                max([usage.get(service, 0) for usage in self.usage_buffer]) * 1.2 * self.replica_dict[service] > 1e-4
             ]
-
             if len(candidates) > 0:
                 for service in candidates:
-                    new_allocation[service] = max(self.min_perrep * self.replica_dict[service],
-                                                  new_allocation[service] - action_value)
+                    min_alloc = max([usage.get(service, 0)
+                                     for usage in self.usage_buffer]) * 1.2 * self.replica_dict[service]
+                    new_allocation[service] = max(min_alloc, new_allocation[service] - action_value)
 
         elif action_type == "increase_percent":
             # 按百分比增加高负载服务
             target_service = max(load, key=lambda k: load[k])
-            new_allocation[target_service] = min(
-                self.default_cpu_config[target_service]["max_cpus"],
-                new_allocation[target_service] * (1 + action_value),
-            )
+            new_allocation[target_service] = min(self.default_cpu_config[target_service]["max_cpus"],
+                                                 new_allocation[target_service] * (1 + action_value))
 
         elif action_type == "decrease_percent":
             # 按百分比减少低负载服务
-            # 过滤掉 allocate 值为 self.min_perrep 的服务
             candidates = [
                 service for service in load if self.allocate_dict[service] -
-                self.min_perrep * self.replica_dict[service] > 1e-4  # 检查 allocate 值是否为 self.min_perrep
+                max([usage.get(service, 0) for usage in self.usage_buffer]) * 1.2 * self.replica_dict[service] > 1e-4
             ]
             if len(candidates) > 0:
                 target_service = min(candidates, key=lambda k: load[k])
-                new_allocation[target_service] = max(self.min_perrep * self.replica_dict[target_service],
-                                                     new_allocation[target_service] * (1 - action_value))
+                min_alloc = max([usage.get(target_service, 0)
+                                 for usage in self.usage_buffer]) * 1.2 * self.replica_dict[target_service]
+                new_allocation[target_service] = max(min_alloc, new_allocation[target_service] * (1 - action_value))
 
         elif action_type == "reset":
             # 重置到初始配置
@@ -561,10 +562,18 @@ class Env:
             if len(self.allocation_history) == self.history_length:
                 new_allocation = deepcopy(self.allocation_history[0])
 
-        for service in new_allocation:
-            if new_allocation[service] < self.min_perrep * self.replica_dict[service]:  # 资源分配下限保护
-                new_allocation[service] = self.min_perrep * self.replica_dict[service]
+        # 统一对所有服务检查最小配置约束
+        for service in self.scalable_service:
+            min_alloc = max([usage.get(service, 0) for usage in self.usage_buffer]) * 1.2 * self.replica_dict[service]
+            if new_allocation[service] < min_alloc:
+                new_allocation[service] = min_alloc
 
+        # 非可扩展服务最小资源保护
+        for service in self.services:
+            if service not in self.scalable_service:
+                new_allocation[service] = self.non_scalable_service_min * self.replica_dict[service]
+
+        # 检查总分配量是否超过上限
         if sum(new_allocation.values()) > self.max_cpu:
             new_allocation = deepcopy(self.initial_allocation)
 
