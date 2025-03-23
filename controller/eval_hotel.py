@@ -51,9 +51,9 @@ def parse_args():
 
     # ================== 评估参数 ==================
     parser.add_argument('--model-path', type=str, default="./model/hotel", help='模型路径')
-    parser.add_argument('--model-step', type=int, default=72000, help='要加载的模型步数')
-    parser.add_argument('--eval-episodes', type=int, default=3, help='评估的episode数量')
-    parser.add_argument('--eval-episode-steps', type=int, default=600, help='评估的episode步数')
+    parser.add_argument('--model-step', type=int, default=79000, help='要加载的模型步数')
+    parser.add_argument('--eval-episodes', type=int, default=1, help='评估的episode数量')
+    parser.add_argument('--eval-episode-steps', type=int, default=1000, help='评估的episode步数')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')

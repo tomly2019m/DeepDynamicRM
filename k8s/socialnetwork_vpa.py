@@ -323,16 +323,7 @@ async def main():
         connection.send_command_sync("init")
 
     for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
-        # setup_slave()
-        # 等待slave监听进程启动完成
-        if users >= 300:
-            time.sleep(10)
-            #重置实验环境
-            command = ("cd ~/DeepDynamicRM/deploy && "
-                       "~/miniconda3/envs/DDRM/bin/python3 "
-                       "deploy_benchmark.py")
-            execute_command(command, stream_output=True)
-
+        
         for load_type in ["mixed"]:
             await start_experiment(connections, users, load_type)
 
