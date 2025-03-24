@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from SACD import SACD_agent
 from controller.utils import ReplayBuffer
-from env import Env
+from env_hotel import Env
 from communication.sync import distribute_project
 from mylocust.util.get_latency_data import get_latest_latency
 
@@ -27,7 +27,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='SACD算法评估参数配置')
 
     # ================== 环境特征参数 ==================
-    parser.add_argument('--service-num', type=int, default=28, help='服务数量 (默认: 28)')
+    parser.add_argument('--service-num', type=int, default=17, help='服务数量 (默认: 17)')
     parser.add_argument('--service-feat-dim', type=int, default=26, help='服务特征维度 (默认: 26)')
     parser.add_argument('--latency-feat-dim', type=int, default=6, help='延迟特征维度 (默认: 6)')
     parser.add_argument('--time-steps', type=int, default=30, help='时间序列长度 (默认: 30)')
@@ -50,19 +50,18 @@ def parse_args():
     parser.add_argument('--dvc', type=str, default="cuda", help='设备 (默认: cuda)')
 
     # ================== 评估参数 ==================
-    parser.add_argument('--model-path', type=str, default="./model/socialnetwork", help='模型路径')
-    parser.add_argument('--model-step', type=int, default=72000, help='要加载的模型步数')
+    parser.add_argument('--model-path', type=str, default="./model/hotel", help='模型路径')
+    parser.add_argument('--model-step', type=int, default=79000, help='要加载的模型步数')
     parser.add_argument('--eval-episodes', type=int, default=1, help='评估的episode数量')
-    parser.add_argument('--eval-episode-steps', type=int, default=3600, help='评估的episode步数')
-    parser.add_argument('--eval', type=str2bool, default=True, help='是否进行评估')
+    parser.add_argument('--eval-episode-steps', type=int, default=1000, help='评估的episode步数')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
     parser.add_argument('--locustfile_name',
                         type=str,
-                        default="socialnetwork_autothrottle_constant",
-                        help='locustfile名称 (默认: socialnetwork)')
-    parser.add_argument('--user_count', type=int, default=250, help='用户数量 (默认: 50)')
+                        default="hotelreservation_noisy",
+                        help='locustfile名称 (默认: hotelreservation)')
+    parser.add_argument('--user_count', type=int, default=3100, help='用户数量 (默认: 3100)')
 
     return parser.parse_args()
 
@@ -81,7 +80,6 @@ async def main(args):
 
     # 初始化环境，创建slave连接
     env = Env()
-    env.eval = args.eval
     # 重置实验环境
     env.reset_benchmark()
     await env.create_connections()
@@ -91,9 +89,8 @@ async def main(args):
     agent = SACD_agent(**vars(args))
 
     # 加载训练好的模型
-    # 模型文件名格式：sacd_actor_20250313_065721_72000.pth
     model_dir = args.model_path
-    model_time = "20250313_065721"  # 从文件名提取的时间戳
+    model_time = "20250319_040040"  # 从文件名提取的时间戳
     model_step = args.model_step  # 72000
     print(f"加载模型: 时间戳 {model_time}, 步数 {model_step}")
     agent.load(model_time, model_step, model_dir)
@@ -104,22 +101,14 @@ async def main(args):
     if not os.path.exists(base_eval_data_path):
         os.makedirs(base_eval_data_path)
 
-    # 根据负载类型指定不同的用户数量
-    user_count_map = {
-        "socialnetwork_autothrottle_bursty": 250,
-        "socialnetwork_autothrottle_constant": 450,
-        "socialnetwork_autothrottle_daynight": 400,
-        "socialnetwork_autothrottle_noisy": 250
-    }
+    # 用户数量范围：从1000到3700，步长为300
+    user_counts = list(range(1000, 3701, 300))
 
-    # 评估四种不同的负载模式
-    load_patterns = ["socialnetwork_autothrottle_daynight", "socialnetwork_autothrottle_noisy"]
+    for user_count in user_counts:
+        print(f"\n========== 开始评估用户数量: {user_count} ==========")
 
-    for load_pattern in load_patterns:
-        print(f"\n========== 开始评估负载模式: {load_pattern} ==========")
-
-        # 为当前负载模式创建专用文件夹
-        eval_data_path = os.path.join(base_eval_data_path, f"load={load_pattern}")
+        # 为当前用户数量创建专用文件夹
+        eval_data_path = os.path.join(base_eval_data_path, f"user={user_count}")
         if not os.path.exists(eval_data_path):
             os.makedirs(eval_data_path)
 
@@ -141,8 +130,8 @@ async def main(args):
                 for connection in connections.values():
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
 
-                # 重置环境 - 使用当前的负载模式
-                state, latency = await env.reset_distributed_eval(user_count_map[load_pattern], load_pattern)
+                # 重置环境
+                state, latency = await env.reset_eval(user_count, args.locustfile_name)
                 done = False
 
                 services = list(env.allocate_dict.keys())
@@ -213,7 +202,7 @@ async def main(args):
 
                     episode_step += 1
 
-                    # 每个episode评估指定步数
+                    # 每个episode评估500步
                     if episode_step == args.eval_episode_steps:
                         break
 
@@ -242,20 +231,19 @@ async def main(args):
                 print(f"Episode {episode_num+1} 完成, 总奖励: {total_reward}")
                 print(f"平均延迟指标: {avg_latencies}")
 
-            # 输出当前负载模式的总体评估结果
-            print(f"\n========== 负载模式 {load_pattern} 评估结果汇总 ==========")
+            # 输出当前用户数量的总体评估结果
+            print(f"\n========== 用户数量 {user_count} 评估结果汇总 ==========")
             print(f"平均总奖励: {np.mean(all_total_rewards):.4f} ± {np.std(all_total_rewards):.4f}")
             for k, v in all_latency_metrics.items():
                 print(f"平均{k}延迟: {np.mean(v):.4f} ± {np.std(v):.4f}ms")
 
-            # 保存当前负载模式的总体评估结果
+            # 保存当前用户数量的总体评估结果
             summary_path = os.path.join(eval_data_path, "eval_summary.json")
             summary = {
                 "model_path": args.model_path,
                 "model_step": args.model_step,
                 "episodes": args.eval_episodes,
-                "user_count": user_count,
-                "load_pattern": load_pattern,  # 添加负载模式信息
+                "user_count": user_count,  # 添加用户数量信息
                 "avg_reward": float(np.mean(all_total_rewards)),
                 "std_reward": float(np.std(all_total_rewards)),
                 "latency_metrics": {
@@ -269,22 +257,22 @@ async def main(args):
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=4)
 
-            print(f"负载模式 {load_pattern} 的评估结果已保存至 {eval_data_path}")
+            print(f"用户数量 {user_count} 的评估结果已保存至 {eval_data_path}")
             env.stop_locust()
 
         except Exception as e:
-            print(f"负载模式 {load_pattern} 的评估出错: {e}")
+            print(f"用户数量 {user_count} 的评估出错: {e}")
             env.stop_locust()
-            # 继续下一个负载模式的评估，而不是完全退出
+            # 继续下一个用户数量的评估，而不是完全退出
             continue
 
     try:
-        # 创建所有负载模式的汇总文件
+        # 创建所有用户数量的汇总文件
         overall_summary_path = os.path.join(base_eval_data_path, "overall_summary.json")
         overall_summary = {
             "model_path": args.model_path,
             "model_step": args.model_step,
-            "load_patterns": load_patterns,
+            "user_counts": user_counts,
             "time": time_str
         }
         with open(overall_summary_path, 'w') as f:
@@ -293,11 +281,9 @@ async def main(args):
     except Exception as e:
         raise e
     finally:
-        env.stop_locust()
         for connection in connections.values():
             connection.send_command_sync("close")
             connection.close()
-        kill_slave()
 
 
 def setup_slave():

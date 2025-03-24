@@ -159,34 +159,7 @@ def compose_random_user():
 
 
 def f(x):
-    """高频多成分噪声函数"""
-    x = np.asarray(x)
-    np.random.seed(42)
-
-    # 傅里叶合成参数（增加高频成分）
-    components = [
-        (0.5, 1.8, 0.2),  # 基础低频
-        (2.0, 2.5, 1.1),  # 主波动
-        (5.0, 1.2, 3.8),  # 高频1
-        (8.0, 0.8, 4.5),  # 高频2
-        (12.0, 0.6, 0.9),  # 超高频1
-        (15.0, 0.4, 2.3)  # 超高频2
-    ]
-
-    # 生成合成信号
-    signal = np.zeros_like(x, dtype=np.float64)
-    for freq, amp, phase in components:
-        signal += amp * np.sin(2 * np.pi * freq * x / 3600 + phase)
-
-    # 线性变换参数（通过预计算优化）
-    signal = (signal + 6.35) * 28.4  # 调整缩放系数
-
-    # 最终箝位与微调
-    signal = np.clip(signal, 105, 390)
-
-    # 均值校准（确保严格满足平均值）
-    adjust_factor = 236 / np.mean(signal)
-    return np.clip(signal * adjust_factor, 105, 390)
+    return 142.5 * np.sin(np.pi * x / 450) - 11.5 * np.sin(np.pi * x / 150) + 236
 
 
 class SocialMediaUser(HttpUser):

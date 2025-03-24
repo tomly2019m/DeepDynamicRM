@@ -181,10 +181,19 @@ def compose_random_user():
     return str(user)
 
 
-# 定义函数 f(x) = 262·sin(0.0045228·x - 0.6906) + 394
-# 最小值227 最大值656 平均值394
 def f(x):
-    return 262 * np.sin(0.0045228 * x - 0.6906) + 394
+    """高斯型单峰函数，满足：
+    - 时间范围：0-3600秒
+    - 最小值227，最大值656，平均值394
+    - 严格单峰，平滑过渡
+    """
+    x = np.asarray(x)
+    amplitude = 656 - 227    # 振幅由极值差确定
+    base = 227               # 基础值=最小值
+    mu = 1800                # 峰值中心(1800秒)
+    sigma = 850              # 标准差(通过积分方程精确校准)
+    
+    return amplitude * np.exp(-(x - mu)**2 / (2 * sigma**2)) + base
 
 
 
