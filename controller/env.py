@@ -15,6 +15,7 @@ import paramiko
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn.functional as F
+import psutil
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -35,6 +36,11 @@ class Env:
         self.config_path = f"{PROJECT_ROOT}/communication/comm.json"
         # 读取配置文件
         self.master, self.slaves, self.port = self._load_config(self.config_path)
+
+        self.eval = False
+        # 添加分布式locust的进程ID存储
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
 
         self.username = "tomly"
         # self._setup_slaves()
@@ -518,7 +524,7 @@ class Env:
         # 两阶段反馈
         self.steps += 1
         done = False
-        if self.steps < self.done_steps:
+        if not self.eval and self.steps < self.done_steps:
             if self.steps % self.every_episode_steps == 0:
                 done = True
         return result[0], result[1], reward, done
@@ -775,12 +781,145 @@ class Env:
             print(f"启动Locust失败: {str(e)}")
             raise
 
+    async def start_locust_distributed_eval(self, user_count, locust_file_name):
+        """启动分布式locust测试（1个master和8个worker）"""
+        # 先停止可能已存在的locust进程
+        self.stop_locust()
+
+        # 初始化PID存储
+        self.locust_pid_master = None
+        self.locust_pid_slaves = []
+
+        # Master节点命令
+        master_cmd = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py", "--host", "http://127.0.0.1:8080",
+            "--master", "--headless", "--users", f"{user_count}", "-r", "50", "-t", f"{10 * 2000}s", "--csv",
+            f"{PROJECT_ROOT}/mylocust/locust_log", "--expect-workers=8", "--master-bind-host=0.0.0.0"
+        ]
+
+        # Worker基础命令
+        worker_cmd_base = [
+            "locust", "-f", f"{PROJECT_ROOT}/mylocust/src/{locust_file_name}.py", "--worker", "--master-host=127.0.0.1"
+        ]
+
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                # 启动Master节点
+                master_process = await asyncio.create_subprocess_exec(*master_cmd,
+                                                                      stdout=asyncio.subprocess.DEVNULL,
+                                                                      stderr=asyncio.subprocess.DEVNULL)
+                self.locust_pid_master = master_process.pid
+                print(f"Locust Master已启动，PID: {self.locust_pid_master}")
+
+                # 等待master启动完成
+                await asyncio.sleep(3)
+
+                # 启动8个Worker节点
+                for i in range(8):
+                    wp = await asyncio.create_subprocess_exec(*worker_cmd_base,
+                                                              stdout=asyncio.subprocess.DEVNULL,
+                                                              stderr=asyncio.subprocess.DEVNULL)
+                    self.locust_pid_slaves.append(wp.pid)
+                    print(f"Locust Worker #{i+1}已启动，PID: {wp.pid}")
+                    # 稍微延迟，避免同时启动造成问题
+                    await asyncio.sleep(0.5)
+
+                # 验证进程状态
+                if await self._check_processes_alive():
+                    print("所有Locust进程启动成功")
+                    return True
+                else:
+                    print("Locust进程启动失败，正在清理...")
+                    await self._cleanup_processes()
+                    retry_count += 1
+
+            except Exception as e:
+                print(f"启动Locust失败: {str(e)}")
+                await self._cleanup_processes()
+                retry_count += 1
+
+        print("达到最大重试次数后仍然失败")
+        return False
+
+    async def _check_processes_alive(self):
+        """检查所有进程是否存活"""
+        try:
+            # 检查Master
+            if self.locust_pid_master:
+                master = psutil.Process(self.locust_pid_master)
+                if master.status() == psutil.STATUS_ZOMBIE:
+                    return False
+
+            # 检查Workers
+            for pid in self.locust_pid_slaves:
+                try:
+                    worker = psutil.Process(pid)
+                    if worker.status() == psutil.STATUS_ZOMBIE:
+                        return False
+                except psutil.NoSuchProcess:
+                    return False
+
+            return True
+        except psutil.NoSuchProcess:
+            return False
+
+    async def _cleanup_processes(self):
+        """清理所有Locust进程"""
+        try:
+            if self.locust_pid_master:
+                os.kill(self.locust_pid_master, signal.SIGTERM)
+                print(f"已终止Master进程 {self.locust_pid_master}")
+
+            for pid in self.locust_pid_slaves:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    print(f"已终止Worker进程 {pid}")
+                except ProcessLookupError:
+                    pass  # 进程可能已经不存在
+
+            # 重置PID列表
+            self.locust_pid_master = None
+            self.locust_pid_slaves = []
+
+            # 等待进程完全终止
+            await asyncio.sleep(2)
+
+        except Exception as e:
+            print(f"清理进程时出错: {str(e)}")
+
     def stop_locust(self):
+        """停止所有locust进程"""
+        # 停止原有locust进程
         if self.locust_pid:
             _, _ = execute_command(f"sudo kill {self.locust_pid}")
-            print("Locust已停止")
-        else:
-            print("Locust未启动")
+            print("Locust进程已停止")
+            self.locust_pid = None
+
+        # 停止分布式master进程
+        if hasattr(self, 'locust_pid_master') and self.locust_pid_master:
+            _, _ = execute_command(f"sudo kill {self.locust_pid_master}")
+            print(f"Locust Master (PID: {self.locust_pid_master})已停止")
+            self.locust_pid_master = None
+
+        # 停止分布式worker进程
+        if hasattr(self, 'locust_pid_slaves') and self.locust_pid_slaves:
+            for pid in self.locust_pid_slaves:
+                try:
+                    _, _ = execute_command(f"sudo kill {pid}")
+                    print(f"Locust Worker (PID: {pid})已停止")
+                except:
+                    pass
+            self.locust_pid_slaves = []
+
+        # 确保所有locust进程都被终止
+        _, _ = execute_command("sudo pkill -f locust")
+
+        # 等待进程完全终止
+        time.sleep(2)
+        print("所有Locust进程已停止")
 
     def reset_deploy(self):
         time.sleep(10)
@@ -843,6 +982,26 @@ class Env:
         await self.start_locust_eval(user_count, locustfile_name)
         print("等待30秒")
         # TODO 把预热时间改为30秒
+        time.sleep(30)
+        print("预热")
+        self.warmup()
+        print("返回状态")
+        return self.get_state_and_latency()
+
+    async def reset_distributed_eval(self, user_count, locustfile_name):
+        """使用分布式Locust重置环境"""
+        print("停止locust")
+        self.stop_locust()
+        print("清空缓存")
+        self.buffer.clear()
+        self.latency_buffer.clear()
+        self.config_buffer.clear()
+        self.allocation_history.clear()
+        # 每个回合重置cpu分配方案
+        self._load_service_default_config()
+        print("启动分布式locust")
+        await self.start_locust_distributed_eval(user_count, locustfile_name)
+        print("等待30秒")
         time.sleep(30)
         print("预热")
         self.warmup()

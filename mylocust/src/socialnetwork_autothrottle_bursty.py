@@ -202,7 +202,7 @@ class SocialMediaUser(HttpUser):
     def wait_time(self):
         # 计算已运行时间（秒）
         elapsed = time.time() - self.start_time
-        wait = 100 / f(elapsed)
+        wait = 250 / f(elapsed)
         return wait
 
     @task(5)

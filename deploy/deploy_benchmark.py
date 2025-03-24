@@ -539,4 +539,3 @@ if __name__ == "__main__":
     setup_swarm_cluster()
     deploy_benchmark()
     init_data()
-    pass

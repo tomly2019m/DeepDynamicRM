@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument('--model-step', type=int, default=72000, help='要加载的模型步数')
     parser.add_argument('--eval-episodes', type=int, default=1, help='评估的episode数量')
     parser.add_argument('--eval-episode-steps', type=int, default=3600, help='评估的episode步数')
+    parser.add_argument('--eval', type=str2bool, default=True, help='是否进行评估')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
@@ -80,6 +81,7 @@ async def main(args):
 
     # 初始化环境，创建slave连接
     env = Env()
+    env.eval = args.eval
     # 重置实验环境
     env.reset_benchmark()
     await env.create_connections()
@@ -138,7 +140,7 @@ async def main(args):
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
 
                 # 重置环境 - 使用当前的负载模式
-                state, latency = await env.reset_eval(user_count, load_pattern)
+                state, latency = await env.reset_distributed_eval(user_count, load_pattern)
                 done = False
 
                 services = list(env.allocate_dict.keys())

@@ -162,7 +162,7 @@ class SocialMediaUser(HttpUser):
     # wait_time = between(5, 9)
     # return wait time in second
     def wait_time(self):
-        return max(100 / np.random.exponential(scale=500), 0.256)
+        return max(450 / np.random.exponential(scale=500), 0.256)
 
     @task(5)
     @tag('compose_post')
