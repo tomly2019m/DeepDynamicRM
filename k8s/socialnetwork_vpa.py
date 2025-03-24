@@ -324,7 +324,7 @@ async def main():
 
     for users in [50, 100, 150, 200, 250, 300, 350, 400, 450]:
         
-        for load_type in ["mixed"]:
+        for load_type in ["noisy"]:
             await start_experiment(connections, users, load_type)
 
     for connection in connections.values():

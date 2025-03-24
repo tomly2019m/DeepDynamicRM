@@ -394,14 +394,14 @@ async def main():
         connections[(slave_host, slave_port)] = connection
         connection.send_command_sync("init")
 
-    for users in [1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700]:
+    for users in [2200, 2500, 2800, 3100, 3400, 3700]:
         command = ("cd ~/DeepDynamicRM/deploy && "
                    "~/miniconda3/envs/DDRM/bin/python3 "
                    "deploy_hotel.py")
         execute_command(command, stream_output=True)
         time.sleep(10)
 
-        for load_type in ["bursty"]:
+        for load_type in ["noisy"]:
             # 移除 min_core 参数，使用 None 代替
             await start_experiment(connections, users, load_type)
 

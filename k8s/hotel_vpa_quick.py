@@ -401,7 +401,7 @@ async def main():
         execute_command(command, stream_output=True)
         time.sleep(10)
 
-        for load_type in ["bursty"]:
+        for load_type in ["noisy"]:
             # 移除 min_core 参数，使用 None 代替
             await start_experiment(connections, users, load_type)
 

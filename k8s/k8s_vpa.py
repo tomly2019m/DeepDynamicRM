@@ -12,7 +12,7 @@ class VPACPURecommender:
         min_allowed: float,
         max_allowed: float,
         target_percentile: float = 1.00,
-        margin: float = 3.5,
+        margin: float = 1.0,
         window_size: int = 100,  # 调整为100秒窗口（每秒1个样本）
         decay_factor: float = 0.99,
     ):
@@ -82,9 +82,10 @@ class VPACPURecommender:
         #——————————————————————————————————————————————————————————————————
         # 直接获取原始样本值
         values = [sample[1] for sample in self.samples]
-
-        # 获取最大值
-        max_value = max(values)
+        values = sorted(values)
+        # 95% 分位数
+        index = int(0.95 * len(values))
+        max_value = values[index]
 
         # 应用边际缓冲
         recommendation = max_value * (1 + self.margin)
