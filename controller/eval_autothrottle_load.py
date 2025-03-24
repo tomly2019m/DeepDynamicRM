@@ -104,13 +104,17 @@ async def main(args):
     if not os.path.exists(base_eval_data_path):
         os.makedirs(base_eval_data_path)
 
-    # 固定用户数量为100
-    user_count = 100
+    # 根据负载类型指定不同的用户数量
+    user_count_map = {
+        "socialnetwork_autothrottle_bursty": 250,
+        "socialnetwork_autothrottle_constant": 450,
+        "socialnetwork_autothrottle_daynight": 400,
+        "socialnetwork_autothrottle_noisy": 250
+    }
 
     # 评估四种不同的负载模式
     load_patterns = [
-        "socialnetwork_autothrottle_bursty", "socialnetwork_autothrottle_constant",
-        "socialnetwork_autothrottle_daynight", "socialnetwork_autothrottle_noisy"
+        "socialnetwork_autothrottle_constant", "socialnetwork_autothrottle_daynight", "socialnetwork_autothrottle_noisy"
     ]
 
     for load_pattern in load_patterns:
@@ -140,7 +144,7 @@ async def main(args):
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
 
                 # 重置环境 - 使用当前的负载模式
-                state, latency = await env.reset_distributed_eval(user_count, load_pattern)
+                state, latency = await env.reset_distributed_eval(user_count_map[load_pattern], load_pattern)
                 done = False
 
                 services = list(env.allocate_dict.keys())

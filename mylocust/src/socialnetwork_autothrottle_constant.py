@@ -158,11 +158,49 @@ def compose_random_user():
     return str(user)
 
 
+def f(x):
+    """动态波动函数，满足：
+    - x ∈ [0, 3600]秒
+    - 输出范围[390, 588]
+    - 平均值500
+    - 连续且含多频波动
+    """
+    x = np.asarray(x)
+
+    # 主波动参数
+    T1 = 2050.63  # 主上升段截止时间（通过积分方程解得）
+    base_low = 410
+    base_high = 568
+
+    # 高频波动参数
+    hf_amp = 20  # 高频振幅
+    hf_freq = 40  # 波动周期数
+
+    # 计算基础波形
+    main_wave = np.piecewise(x, [x <= T1, x > T1], [
+        lambda x: base_low + (base_high - base_low) / T1 * x, lambda x: base_high + (base_low - base_high) /
+        (3600 - T1) * (x - T1)
+    ])
+
+    # 添加高频波动
+    hf_wave = hf_amp * np.sin(hf_freq * np.pi * x / 3600)
+
+    # 合成并限制范围
+    return np.clip(main_wave + hf_wave, 390, 588)
+
+
 class SocialMediaUser(HttpUser):
-    # wait_time = between(5, 9)
-    # return wait time in second
+    # 添加实例变量记录启动时间
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_time = self.environment.runner.stats.start_time if self.environment.runner else time.time()
+
+    # 修改后的wait_time方法
     def wait_time(self):
-        return max(450 / np.random.exponential(scale=500), 0.256)
+        # 计算已运行时间（秒）
+        elapsed = time.time() - self.start_time
+        wait = 450 / f(elapsed)
+        return wait
 
     @task(5)
     @tag('compose_post')
