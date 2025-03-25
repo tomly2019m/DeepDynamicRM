@@ -153,9 +153,10 @@ async def main(args):
                 step_csv_path = os.path.join(episode_dir, "step_data.csv")
                 with open(step_csv_path, 'w', newline='') as f:
                     writer = csv.writer(f)
-                    # 构建表头：公共字段 + 服务字段
+                    # 构建表头：公共字段 + 服务字段 + CPU使用率字段
                     header = ['step', 'action', 'reward', 'total_cpu', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
-                            [f'{s}_cpu' for s in services]
+                            [f'{s}_cpu' for s in services] + \
+                            [f'{s}_usage' for s in services]  # 添加CPU使用率字段
                     writer.writerow(header)
 
                 episode_step = 0
@@ -198,7 +199,8 @@ async def main(args):
                             reward,
                             total_cpu,
                             *raw_latency,  # 展开延迟特征
-                            *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
+                            *[original_cpu_allocate[s] for s in services],  # 各服务CPU分配
+                            *[env.usage_buffer[-1][s] if env.usage_buffer else 0 for s in services]  # 各服务CPU使用率
                         ]
                         writer.writerow(row)
 
@@ -254,7 +256,7 @@ async def main(args):
                 "model_path": args.model_path,
                 "model_step": args.model_step,
                 "episodes": args.eval_episodes,
-                "user_count": user_count,
+                "user_count": user_count_map[load_pattern],
                 "load_pattern": load_pattern,  # 添加负载模式信息
                 "avg_reward": float(np.mean(all_total_rewards)),
                 "std_reward": float(np.std(all_total_rewards)),

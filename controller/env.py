@@ -59,6 +59,7 @@ class Env:
         self.buffer = deque(maxlen=self.window_size)
         self.latency_buffer = deque(maxlen=self.window_size)
         self.config_buffer = deque(maxlen=self.window_size)
+        self.usage_buffer = deque(maxlen=self.window_size)
 
         # 在预测器训练时，得到的归一化器
         self.scalers = []
@@ -336,6 +337,11 @@ class Env:
         for k, v in gathered["cpu"].items():
             gathered["cpu"][k] = [item / 1e6 for item in v]
         self.cpu_state = gathered["cpu"]
+
+        cpu_usage = {k: sum(v) for k, v in gathered["cpu"].items()}
+        print(f"CPU使用情况: {cpu_usage}")
+        self.usage_buffer.append(cpu_usage)
+
         latency = get_latest_latency()
         gathered["cpu"] = process_data(gathered["cpu"])
         gathered["memory"] = process_data(gathered["memory"])
