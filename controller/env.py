@@ -72,7 +72,7 @@ class Env:
         self.actions = []
         self._load_actions()
         # 最低分配数量
-        self.min_allocate = 60
+        self.min_allocate = 10
         self.non_scalable_service_min = 0.2
         self.constraint = None
         # 保存资源配置历史
@@ -512,15 +512,20 @@ class Env:
                 torch.FloatTensor(state_batch).to("cuda"),
                 torch.FloatTensor(latency_batch).to("cuda"))
             # 应用softmax获取概率分布
+            # probs = F.softmax(predictions, dim=1)
+            # # 获取第五类的概率作为违例概率
+            # # 采用加权方式计算违例概率
+            # weighted_pv = 0
+            # max_weight = 6  # 最大权重值
+            # for i in range(6):  # 假设有6类，索引从0到5
+            #     weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
+            #     weighted_pv += probs[0, i].item() * weight
+            # pv = weighted_pv  # 使用归一化加权结果作为违例概率
+
             probs = F.softmax(predictions, dim=1)
-            # 获取第五类的概率作为违例概率
-            # 采用加权方式计算违例概率
-            weighted_pv = 0
-            max_weight = 6  # 最大权重值
-            for i in range(6):  # 假设有6类，索引从0到5
-                weight = (i + 1) / max_weight  # 归一化权重，范围从1/6到1
-                weighted_pv += probs[0, i].item() * weight
-            pv = weighted_pv  # 使用归一化加权结果作为违例概率
+            pv = probs[0, 5].item()
+
+
         print(f"延迟概率分布：{probs}")
         print(f"违例概率: {pv * 100:.2f}%")
         print(f"当前延迟: {latency}")

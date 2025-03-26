@@ -195,7 +195,7 @@ class SocialMediaUser(HttpUser):
         # self.last_wait_time += 1
         # return self.last_wait_time
 
-    @task(10)
+    @task(5)
     @tag('compose_post')
     def compose_post(self):
         global image_names
@@ -297,7 +297,7 @@ class SocialMediaUser(HttpUser):
             logging.warning('read_home_timeline resp.status = %d, text=%s' %
                             (r.status_code, r.text))
 
-    @task(10)
+    @task(15)
     @tag('read_user_timeline')
     def read_user_timeline(self):
         start = random.randint(0, 100)
