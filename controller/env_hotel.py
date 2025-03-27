@@ -49,6 +49,7 @@ class Env:
 
         # 配置其余参数
         self.window_size = window_size
+        self.eval = False
 
         # 保存缓存数据 当达到30个时间步的数据之后再开始执行决策
         self.buffer = deque(maxlen=self.window_size)
@@ -470,7 +471,7 @@ class Env:
         # 两阶段反馈
         self.steps += 1
         done = False
-        if self.steps < self.done_steps:
+        if not self.eval and self.steps < self.done_steps:
             if self.steps % self.every_episode_steps == 0:
                 done = True
         return result[0], result[1], reward, done

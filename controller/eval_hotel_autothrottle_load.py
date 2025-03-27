@@ -53,13 +53,14 @@ def parse_args():
     parser.add_argument('--model-path', type=str, default="./model/hotel", help='模型路径')
     parser.add_argument('--model-step', type=int, default=79000, help='要加载的模型步数')
     parser.add_argument('--eval-episodes', type=int, default=1, help='评估的episode数量')
-    parser.add_argument('--eval-episode-steps', type=int, default=1000, help='评估的episode步数')
+    parser.add_argument('--eval-episode-steps', type=int, default=3600, help='评估的episode步数')
+    parser.add_argument('--eval', type=str2bool, default=True, help='是否进行评估')
 
     # ================== 运行模式 ==================
     parser.add_argument('--username', type=str, default="tomly", help='用户名 (默认: tomly)')
     parser.add_argument('--locustfile_name',
                         type=str,
-                        default="hotelreservation_noisy",
+                        default="hotelreservation_autothrottle_constant",
                         help='locustfile名称 (默认: hotelreservation)')
     parser.add_argument('--user_count', type=int, default=3100, help='用户数量 (默认: 3100)')
 
@@ -80,6 +81,7 @@ async def main(args):
 
     # 初始化环境，创建slave连接
     env = Env()
+    env.eval = args.eval
     # 重置实验环境
     env.reset_benchmark()
     await env.create_connections()
@@ -101,14 +103,26 @@ async def main(args):
     if not os.path.exists(base_eval_data_path):
         os.makedirs(base_eval_data_path)
 
-    # 用户数量范围：从1000到3700，步长为300
-    user_counts = list(range(1000, 3701, 300))
+    # 根据负载类型指定不同的用户数量
+    user_count_map = {
+        "hotelreservation_autothrottle_bursty": 3000,
+        "hotelreservation_autothrottle_constant": 2000,
+        "hotelreservation_autothrottle_daynight": 2700,
+        "hotelreservation_autothrottle_noisy": 1600
+    }
 
-    for user_count in user_counts:
-        print(f"\n========== 开始评估用户数量: {user_count} ==========")
+    # # 评估四种不同的负载模式
+    # load_patterns = [
+    #     "hotelreservation_autothrottle_bursty", "hotelreservation_autothrottle_constant",
+    #     "hotelreservation_autothrottle_daynight", "hotelreservation_autothrottle_noisy"
+    # ]
+    load_patterns = ["hotelreservation_autothrottle_daynight"]
 
-        # 为当前用户数量创建专用文件夹
-        eval_data_path = os.path.join(base_eval_data_path, f"user={user_count}")
+    for load_pattern in load_patterns:
+        print(f"\n========== 开始评估负载模式: {load_pattern} ==========")
+
+        # 为当前负载模式创建专用文件夹
+        eval_data_path = os.path.join(base_eval_data_path, f"load={load_pattern}")
         if not os.path.exists(eval_data_path):
             os.makedirs(eval_data_path)
 
@@ -130,8 +144,8 @@ async def main(args):
                 for connection in connections.values():
                     connection.send_command_sync(f"update{json.dumps(cpu_allocate)}")
 
-                # 重置环境
-                state, latency = await env.reset_eval(user_count, args.locustfile_name)
+                # 重置环境 - 使用当前的负载模式
+                state, latency = await env.reset_eval(user_count_map[load_pattern], load_pattern)
                 done = False
 
                 services = list(env.allocate_dict.keys())
@@ -142,9 +156,10 @@ async def main(args):
                 step_csv_path = os.path.join(episode_dir, "step_data.csv")
                 with open(step_csv_path, 'w', newline='') as f:
                     writer = csv.writer(f)
-                    # 构建表头：公共字段 + 服务字段
+                    # 构建表头：公共字段 + 服务字段 + CPU使用率字段
                     header = ['step', 'action', 'reward', 'total_cpu', 'rps', '90%', '95%', '98%', '99%', '99.9%'] + \
-                            [f'{s}_cpu' for s in services]
+                            [f'{s}_cpu' for s in services] + \
+                            [f'{s}_usage' for s in services]  # 添加CPU使用率字段
                     writer.writerow(header)
 
                 episode_step = 0
@@ -187,7 +202,8 @@ async def main(args):
                             reward,
                             total_cpu,
                             *raw_latency,  # 展开延迟特征
-                            *[original_cpu_allocate[s] for s in services]  # 各服务CPU分配
+                            *[original_cpu_allocate[s] for s in services],  # 各服务CPU分配
+                            *[env.usage_buffer[-1][s] if env.usage_buffer else 0 for s in services]  # 各服务CPU使用率
                         ]
                         writer.writerow(row)
 
@@ -231,19 +247,20 @@ async def main(args):
                 print(f"Episode {episode_num+1} 完成, 总奖励: {total_reward}")
                 print(f"平均延迟指标: {avg_latencies}")
 
-            # 输出当前用户数量的总体评估结果
-            print(f"\n========== 用户数量 {user_count} 评估结果汇总 ==========")
+            # 输出当前负载模式的总体评估结果
+            print(f"\n========== 负载模式 {load_pattern} 评估结果汇总 ==========")
             print(f"平均总奖励: {np.mean(all_total_rewards):.4f} ± {np.std(all_total_rewards):.4f}")
             for k, v in all_latency_metrics.items():
                 print(f"平均{k}延迟: {np.mean(v):.4f} ± {np.std(v):.4f}ms")
 
-            # 保存当前用户数量的总体评估结果
+            # 保存当前负载模式的总体评估结果
             summary_path = os.path.join(eval_data_path, "eval_summary.json")
             summary = {
                 "model_path": args.model_path,
                 "model_step": args.model_step,
                 "episodes": args.eval_episodes,
-                "user_count": user_count,  # 添加用户数量信息
+                "user_count": user_count_map[load_pattern],
+                "load_pattern": load_pattern,  # 添加负载模式信息
                 "avg_reward": float(np.mean(all_total_rewards)),
                 "std_reward": float(np.std(all_total_rewards)),
                 "latency_metrics": {
@@ -257,22 +274,22 @@ async def main(args):
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=4)
 
-            print(f"用户数量 {user_count} 的评估结果已保存至 {eval_data_path}")
+            print(f"负载模式 {load_pattern} 的评估结果已保存至 {eval_data_path}")
             env.stop_locust()
 
         except Exception as e:
-            print(f"用户数量 {user_count} 的评估出错: {e}")
+            print(f"负载模式 {load_pattern} 的评估出错: {e}")
             env.stop_locust()
-            # 继续下一个用户数量的评估，而不是完全退出
+            # 继续下一个负载模式的评估，而不是完全退出
             continue
 
     try:
-        # 创建所有用户数量的汇总文件
+        # 创建所有负载模式的汇总文件
         overall_summary_path = os.path.join(base_eval_data_path, "overall_summary.json")
         overall_summary = {
             "model_path": args.model_path,
             "model_step": args.model_step,
-            "user_counts": user_counts,
+            "load_patterns": load_patterns,
             "time": time_str
         }
         with open(overall_summary_path, 'w') as f:
@@ -281,6 +298,7 @@ async def main(args):
     except Exception as e:
         raise e
     finally:
+        env.stop_locust()
         for connection in connections.values():
             connection.send_command_sync("close")
             connection.close()
